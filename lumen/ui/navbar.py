@@ -141,6 +141,7 @@ class NavbarWidget(QFrame):
             "upload": "File Upload",
             "analysis": "Image Analysis",
             "results": "Quantification Results",
+            "batch_explorer": "Batch Results Explorer",
             "settings": "System Settings"
         }
         display_title = titles.get(page_name, "Lumen")

@@ -116,9 +116,13 @@ class SidebarWidget(QFrame):
 
     @Slot(str)
     def _on_state_page_changed(self, page_name: str):
-        if page_name in self.nav_buttons:
+        target_page = page_name
+        if target_page == "batch_explorer":
+            target_page = "analysis"
+            
+        if target_page in self.nav_buttons:
             # Check the button matching current page (triggers QButtonGroup exclusion)
-            self.nav_buttons[page_name].setChecked(True)
+            self.nav_buttons[target_page].setChecked(True)
 
     def update_collapse_button_icon(self):
         # Use simple text arrow indicators or SVGs

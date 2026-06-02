@@ -1,5 +1,92 @@
+from typing import Optional, Any
 from PySide6.QtCore import QObject, Signal
 from lumen.core.logger import logger
+
+class AnalysisSession:
+    """Stores persistent state for a specific microscopy analysis session."""
+    def __init__(self, image_path: str):
+        self.image_path = image_path
+        self.analysis_results = None
+        self.quality_mode = "Balanced"
+        self.mask_opacity = 40
+        self.show_original_image = True
+        self.show_segmentation_overlay = True
+        self.segmentation_method = "AI Segmentation"
+        self.current_workflow = None
+        self.viewer_state = None  # Dict of {transform, h_scroll, v_scroll, initial_fit_scale, zoom_touched}
+
+class BatchResultSession:
+    """Stores persistent state for a specific batch explorer session."""
+    def __init__(self, batch_results_dir: str):
+        self.batch_results_dir = batch_results_dir
+        self.records = []
+        self.manifest_data = {}
+        self.selected_filename = None
+        self.search_text = ""
+        self.sort_by = "Alphabetical"
+        self.show_original_image = True
+        self.show_segmentation_overlay = True
+        self.mask_opacity = 40
+        self.viewer_state = None  # Dict of {transform, h_scroll, v_scroll, initial_fit_scale, zoom_touched}
+
+class WorkspaceManager(QObject):
+    """Coordinates the lifecycle of active page sessions and context invalidation."""
+    
+    def __init__(self):
+        super().__init__()
+        self._analysis_sessions = {}  # dict of image_path -> AnalysisSession
+        self._batch_sessions = {}     # dict of batch_results_dir -> BatchResultSession
+        self._active_analysis_path = None
+        self._active_batch_dir = None
+
+    def get_analysis_session(self, image_path: str) -> Optional[AnalysisSession]:
+        """Gets the analysis session for the given image path."""
+        return self._analysis_sessions.get(image_path)
+
+    def start_analysis_session(self, image_path: str) -> AnalysisSession:
+        """Gets or starts a session for the given image path."""
+        if image_path not in self._analysis_sessions:
+            self._analysis_sessions[image_path] = AnalysisSession(image_path)
+            logger.info("WorkspaceManager: Started fresh AnalysisSession for %s", image_path)
+        self._active_analysis_path = image_path
+        return self._analysis_sessions[image_path]
+
+    def reset_analysis_session(self, image_path: str = None):
+        """Clears the specified analysis session, or all if none provided."""
+        if image_path:
+            self._analysis_sessions.pop(image_path, None)
+            if self._active_analysis_path == image_path:
+                self._active_analysis_path = None
+            logger.info("WorkspaceManager: Cleared AnalysisSession for %s", image_path)
+        else:
+            self._analysis_sessions.clear()
+            self._active_analysis_path = None
+            logger.info("WorkspaceManager: All AnalysisSessions cleared.")
+
+    def get_batch_session(self, batch_results_dir: str) -> Optional[BatchResultSession]:
+        """Gets the batch session for the given batch directory."""
+        return self._batch_sessions.get(batch_results_dir)
+
+    def start_batch_session(self, batch_results_dir: str) -> BatchResultSession:
+        """Gets or starts a session for the given batch directory."""
+        if batch_results_dir not in self._batch_sessions:
+            self._batch_sessions[batch_results_dir] = BatchResultSession(batch_results_dir)
+            logger.info("WorkspaceManager: Started fresh BatchResultSession for %s", batch_results_dir)
+        self._active_batch_dir = batch_results_dir
+        return self._batch_sessions[batch_results_dir]
+
+    def reset_batch_session(self, batch_results_dir: str = None):
+        """Clears the specified batch session, or all if none provided."""
+        if batch_results_dir:
+            self._batch_sessions.pop(batch_results_dir, None)
+            if self._active_batch_dir == batch_results_dir:
+                self._active_batch_dir = None
+            logger.info("WorkspaceManager: Cleared BatchResultSession for %s", batch_results_dir)
+        else:
+            self._batch_sessions.clear()
+            self._active_batch_dir = None
+            logger.info("WorkspaceManager: All BatchResultSessions cleared.")
+
 
 class AppState(QObject):
     """Centralized, signal-driven state manager for Lumen."""
@@ -32,6 +119,9 @@ class AppState(QObject):
 
     def __init__(self):
         super().__init__()
+        # Workspace Session Manager
+        self.workspace_manager = WorkspaceManager()
+        
         # Internal state store
         self._current_image_path = None
         self._current_workflow = None
@@ -271,6 +361,9 @@ class AppState(QObject):
         self._analysis_results = None
         
         self._segmentation_method = "AI Segmentation"
+        
+        # Clear workspace manager session as well
+        self.workspace_manager.reset_analysis_session()
         
         self.quality_mode_changed.emit("Balanced")
         self.mask_opacity_changed.emit(40)

@@ -44,7 +44,7 @@ class AnalysisPlaceholderWidget(QFrame):
         layout.addWidget(title_lbl)
 
         # Description
-        desc_lbl = QLabel("Upload a microscopy image to begin biological analysis.")
+        desc_lbl = QLabel("Upload an image or open one from Batch Explorer.")
         desc_lbl.setStyleSheet("font-size: 12px; color: #9CA3AF;")
         desc_lbl.setAlignment(Qt.AlignCenter)
         layout.addWidget(desc_lbl)
@@ -156,7 +156,7 @@ class InteractiveImageViewer(QGraphicsView):
         # Premium Empty State Placeholder
         self._placeholder = AnalysisPlaceholderWidget(self)
 
-    def set_image(self, pixmap: QPixmap):
+    def set_image(self, pixmap: QPixmap, restore_state: dict = None):
         """Sets canvas image and resets viewport zoom."""
         self.clear_highlight()
         if pixmap and not pixmap.isNull():
@@ -167,15 +167,23 @@ class InteractiveImageViewer(QGraphicsView):
             self.mask_item.setVisible(False)
             self.scene.setSceneRect(self.pixmap_item.boundingRect())
             
-            # Reset transform and fit completely to window on initial load
-            self.resetTransform()
-            self.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
-            
-            # Store initial scale for clamping ratios
-            self._initial_fit_scale = self.transform().m11()
-            self._zoom_touched = False
+            if restore_state:
+                self.setTransform(restore_state["transform"])
+                self.horizontalScrollBar().setValue(restore_state["h_scroll"])
+                self.verticalScrollBar().setValue(restore_state["v_scroll"])
+                self._initial_fit_scale = restore_state["initial_fit_scale"]
+                self._zoom_touched = restore_state["zoom_touched"]
+                logger.debug("ImageViewer: Displaying loaded image and restoring view state.")
+            else:
+                # Reset transform and fit completely to window on initial load
+                self.resetTransform()
+                self.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
+                
+                # Store initial scale for clamping ratios
+                self._initial_fit_scale = self.transform().m11()
+                self._zoom_touched = False
+                logger.debug("ImageViewer: Displaying loaded image on canvas. Fit scale: %s", self._initial_fit_scale)
             self.update_viewer_cursor()
-            logger.debug("ImageViewer: Displaying loaded image on canvas. Fit scale: %s", self._initial_fit_scale)
         else:
             self.clear()
 
@@ -457,9 +465,18 @@ class AnalysisPage(QWidget):
         self._sync_theme()
 
     def _setup_ui(self):
-        self.main_layout = QHBoxLayout(self)
+        self.page_layout = QVBoxLayout(self)
+        self.page_layout.setObjectName("PageVerticalLayout")
+        self.page_layout.setContentsMargins(20, 20, 20, 20)
+        self.page_layout.setSpacing(12)
+
+        from lumen.ui.workspace_switcher import WorkspaceSwitcher
+        self.workspace_switcher = WorkspaceSwitcher("single")
+        self.page_layout.addWidget(self.workspace_switcher)
+
+        self.main_layout = QHBoxLayout()
         self.main_layout.setObjectName("PageContainer")
-        self.main_layout.setContentsMargins(20, 20, 20, 20)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(16)
 
         # 1. Left Panel: Image Metadata List (Simplified and Concise)
@@ -743,6 +760,7 @@ class AnalysisPage(QWidget):
         self.right_splitter.setSizes([800, 260])
         
         self.main_layout.addWidget(self.right_splitter, 1)
+        self.page_layout.addLayout(self.main_layout, 1)
 
     def _init_connections(self):
         # Trigger actual Cellpose analysis on click
@@ -777,40 +795,123 @@ class AnalysisPage(QWidget):
 
     def _sync_state(self):
         """Initial check for loaded state."""
-        if state.current_image_path:
-            self._on_image_loaded(state.current_image_path)
-        else:
+        image_path = state.current_image_path
+        if not image_path:
             self._on_image_loaded("")
-        if state.current_workflow:
-            self._on_workflow_selected(state.current_workflow)
+            return
             
-        # Sync Phase 2D state properties
-        self._on_state_show_original_changed(state.show_original_image)
-        self._on_state_show_overlay_changed(state.show_segmentation_overlay)
-        self._on_state_mask_opacity_changed(state.mask_opacity)
-        self._on_state_quality_mode_changed(state.quality_mode)
+        session = state.workspace_manager.get_analysis_session(image_path)
+        if session:
+            logger.info("AnalysisPage: Restoring from persistent session state.")
+            state.quality_mode = session.quality_mode
+            state.mask_opacity = session.mask_opacity
+            state.show_original_image = session.show_original_image
+            state.show_segmentation_overlay = session.show_segmentation_overlay
+            state.segmentation_method = session.segmentation_method
+            state.current_workflow = session.current_workflow
+            state.analysis_results = session.analysis_results
+            
+            self._restore_from_session(session)
+        else:
+            state.workspace_manager.start_analysis_session(image_path)
+            self._on_image_loaded(image_path)
+            if state.current_workflow:
+                self._on_workflow_selected(state.current_workflow)
+                
+            # Sync Phase 2D state properties
+            self._on_state_show_original_changed(state.show_original_image)
+            self._on_state_show_overlay_changed(state.show_segmentation_overlay)
+            self._on_state_mask_opacity_changed(state.mask_opacity)
+            self._on_state_quality_mode_changed(state.quality_mode)
+            self._on_state_segmentation_method_changed(state.segmentation_method)
 
-        # Sync Segmentation state properties
-        self._on_state_segmentation_method_changed(state.segmentation_method)
+    def _save_to_session(self):
+        image_path = state.current_image_path
+        if not image_path:
+            return
+            
+        session = state.workspace_manager.start_analysis_session(image_path)
+        session.analysis_results = state.analysis_results
+        session.quality_mode = state.quality_mode
+        session.mask_opacity = state.mask_opacity
+        session.show_original_image = state.show_original_image
+        session.show_segmentation_overlay = state.show_segmentation_overlay
+        session.segmentation_method = state.segmentation_method
+        session.current_workflow = state.current_workflow
+        
+        v = self.image_viewer
+        if v.pixmap_item and not v.pixmap_item.pixmap().isNull():
+            session.viewer_state = {
+                "transform": v.transform(),
+                "h_scroll": v.horizontalScrollBar().value(),
+                "v_scroll": v.verticalScrollBar().value(),
+                "initial_fit_scale": v._initial_fit_scale,
+                "zoom_touched": v._zoom_touched
+            }
+        else:
+            session.viewer_state = None
+        logger.info("AnalysisPage: Saved session state to workspace manager.")
+
+    def _restore_from_session(self, session):
+        path = session.image_path
+        if path and os.path.exists(path):
+            if image_manager._current_path != path:
+                image_manager.load_image(path)
+                
+            pixmap = image_manager.get_qpixmap()
+            if pixmap:
+                self.image_viewer.set_image(pixmap, restore_state=session.viewer_state)
+                self.viewer_contrast_lbl.setVisible(True)
+                
+                if session.analysis_results:
+                    self.image_viewer.set_analysis_results(session.analysis_results)
+                    masks = session.analysis_results.get("masks")
+                    if masks is not None:
+                        self.image_viewer.set_masks(masks)
+                        self.image_viewer.set_show_original(session.show_original_image)
+                        self.image_viewer.set_show_overlay(session.show_segmentation_overlay)
+                        self.image_viewer.set_mask_opacity(session.mask_opacity)
+                
+                meta = image_manager.get_metadata()
+                if meta:
+                    self.fn_val.setText(meta.get("filename", "-"))
+                    self.res_val.setText(f"{meta.get('width')} × {meta.get('height')}")
+                    self.ch_val.setText(str(meta.get("channels", "-")))
+                    self.mode_val.setText(meta.get("mode", "-").upper())
+                    self.type_val.setText(meta.get("classification", "-"))
+
+                    self.meta_placeholder.setVisible(False)
+                    self.meta_container.setVisible(True)
+
+                self.run_btn.setEnabled(True)
+                self.run_btn.setCursor(QCursor(Qt.PointingHandCursor))
+                
+                if session.current_workflow:
+                    self._on_workflow_selected(session.current_workflow)
 
     # Slots to update state from controls
     def _on_show_original_toggled(self, checked: bool):
         state.show_original_image = checked
+        self._save_to_session()
 
     def _on_show_overlay_toggled(self, checked: bool):
         state.show_segmentation_overlay = checked
+        self._save_to_session()
 
     def _on_opacity_slider_changed(self, val: int):
         state.mask_opacity = val
+        self._save_to_session()
 
     def _on_quality_combo_changed(self, text: str):
         state.quality_mode = text
+        self._save_to_session()
 
     def _on_method_combo_changed(self, text: str):
         if text == "AI Segmentation (Cellpose)":
             state.segmentation_method = "AI Segmentation"
         else:
             state.segmentation_method = text
+        self._save_to_session()
 
     # Slots to update UI controls from state changes
     @Slot(bool)
@@ -1028,6 +1129,9 @@ class AnalysisPage(QWidget):
         if masks is not None:
             self.image_viewer.set_masks(masks)
             
+        # Trigger lightweight session checkpoint save
+        self._save_to_session()
+            
         QMessageBox.information(
             self,
             "Analysis Completed",
@@ -1043,6 +1147,8 @@ class AnalysisPage(QWidget):
     def _on_page_changed(self, page_name: str):
         if page_name == "analysis":
             self._sync_state()
+        else:
+            self._save_to_session()
 
     @Slot(str)
     def _on_analysis_failed(self, error_msg: str):
@@ -1065,8 +1171,10 @@ class AnalysisPage(QWidget):
 
     @Slot(str)
     def _sync_theme(self, theme_name: str = ""):
-        theme = theme_service.current_theme
+        theme = theme_name if theme_name else theme_service.current_theme
         self.image_viewer.sync_theme(theme)
+        if hasattr(self, 'workspace_switcher'):
+            self.workspace_switcher.sync_theme(theme)
         if theme == "light":
             # Style splitter handle for light mode
             self.right_splitter.setStyleSheet("""

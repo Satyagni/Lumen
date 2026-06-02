@@ -16,6 +16,9 @@ The following systems are fully functional, validated by tests, and **must not b
 - **Interactive ImageViewer Canvas**: Renders zoom, panning, custom mask opacity overlays, hover highlights, and click metrics tooltips.
 - **Data Export Pipeline**: Generates CSV dimension logs, overlay PNGs, raw 16-bit label mask TIFFs, and PDF reports.
 - **Sequential Batch Loop**: Sequential multi-image queue system in `batch_manager.py` capable of stable **200-image batch runs**.
+- **Reusable WorkspaceSwitcher Component**: Shared switcher button bar at the top of `AnalysisPage` (Single Image Explorer) and `BatchResultsExplorerPage` (Batch Results Explorer) handling page navigation and theme alignment.
+- **Persistent Session Architecture**: Dictionary-based state maps in `WorkspaceManager` that preserve list selection, filters, sorting, canvas zoom transform, and scroll coordinates when transitioning between workspaces.
+- **Dedicated Results Page Routing**: Navigating to `"results"` resolves directly to the Results panel showing active image metrics instead of redirecting to the batch explorer.
 
 ---
 

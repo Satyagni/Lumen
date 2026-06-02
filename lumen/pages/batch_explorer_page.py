@@ -74,6 +74,60 @@ def load_microscopy_pixmap(file_path: str) -> QPixmap:
     return QPixmap.fromImage(qimg)
 
 
+class BatchPlaceholderWidget(QFrame):
+    """Elegant placeholder shown when no batch is loaded or active."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("BatchPlaceholder")
+        
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignCenter)
+        layout.setSpacing(14)
+        layout.setContentsMargins(24, 24, 24, 24)
+
+        # Scientific Icon
+        self.icon_lbl = QLabel("📂")
+        self.icon_lbl.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.icon_lbl)
+
+        # Title
+        self.title_lbl = QLabel("No Batch Loaded")
+        self.title_lbl.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.title_lbl)
+
+        # Description
+        self.desc_lbl = QLabel("No batch loaded. Run a batch analysis to browse results.")
+        self.desc_lbl.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.desc_lbl)
+        
+        self.sync_theme(theme_service.current_theme)
+
+    def sync_theme(self, theme_name: str):
+        if theme_name == "light":
+            self.setStyleSheet("""
+                #BatchPlaceholder {
+                    background-color: #FFFFFF;
+                    border: 1px dashed #D1D5DB;
+                    border-radius: 8px;
+                }
+            """)
+            self.icon_lbl.setStyleSheet("font-size: 40px; color: #4F46E5; margin-bottom: 4px; background: transparent;")
+            self.title_lbl.setStyleSheet("font-size: 15px; font-weight: bold; color: #111827; background: transparent;")
+            self.desc_lbl.setStyleSheet("font-size: 12px; color: #4B5563; background: transparent;")
+        else:
+            self.setStyleSheet("""
+                #BatchPlaceholder {
+                    background-color: #131317;
+                    border: 1px dashed #2B2B35;
+                    border-radius: 8px;
+                }
+            """)
+            self.icon_lbl.setStyleSheet("font-size: 40px; color: #6366F1; margin-bottom: 4px; background: transparent;")
+            self.title_lbl.setStyleSheet("font-size: 15px; font-weight: bold; color: #FFFFFF; background: transparent;")
+            self.desc_lbl.setStyleSheet("font-size: 12px; color: #9CA3AF; background: transparent;")
+
+
 class BatchResultsExplorerPage(QWidget):
     """Integrated workspace for completed batch analysis review."""
 
@@ -88,9 +142,18 @@ class BatchResultsExplorerPage(QWidget):
         self._sync_theme()
 
     def _setup_ui(self):
-        self.main_layout = QHBoxLayout(self)
+        self.page_layout = QVBoxLayout(self)
+        self.page_layout.setObjectName("PageVerticalLayout")
+        self.page_layout.setContentsMargins(20, 20, 20, 20)
+        self.page_layout.setSpacing(12)
+
+        from lumen.ui.workspace_switcher import WorkspaceSwitcher
+        self.workspace_switcher = WorkspaceSwitcher("batch")
+        self.page_layout.addWidget(self.workspace_switcher)
+
+        self.main_layout = QHBoxLayout()
         self.main_layout.setObjectName("PageContainer")
-        self.main_layout.setContentsMargins(20, 20, 20, 20)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(16)
 
         # ----------------------------------------------------
@@ -308,14 +371,19 @@ class BatchResultsExplorerPage(QWidget):
 
         self.main_layout.addWidget(self.right_panel)
 
+        self._placeholder = BatchPlaceholderWidget(self)
+        self.main_layout.addWidget(self._placeholder, 1)
+
+        self.page_layout.addLayout(self.main_layout, 1)
+
     def _init_connections(self):
         # State signals
         state.page_changed.connect(self._on_page_changed)
         state.theme_changed.connect(self._sync_theme)
 
         # Search and sorting
-        self.search_bar.textChanged.connect(self._populate_list)
-        self.sort_combo.currentTextChanged.connect(self._populate_list)
+        self.search_bar.textChanged.connect(self._on_search_changed)
+        self.sort_combo.currentTextChanged.connect(self._on_sort_changed)
 
         # Selection handler
         self.navigator_list.currentItemChanged.connect(self._on_selection_changed)
@@ -325,8 +393,8 @@ class BatchResultsExplorerPage(QWidget):
         self.next_btn.clicked.connect(self._on_next_clicked)
 
         # Visual controls
-        self.show_original_chk.toggled.connect(self.image_viewer.set_show_original)
-        self.show_overlay_chk.toggled.connect(self.image_viewer.set_show_overlay)
+        self.show_original_chk.toggled.connect(self._on_show_original_changed)
+        self.show_overlay_chk.toggled.connect(self._on_show_overlay_changed)
         self.opacity_slider.valueChanged.connect(self._on_opacity_slider_changed)
         self.reset_view_btn.clicked.connect(self._on_reset_view_clicked)
 
@@ -334,53 +402,177 @@ class BatchResultsExplorerPage(QWidget):
         self.open_analysis_btn.clicked.connect(self._on_open_analysis_clicked)
         self.back_upload_btn.clicked.connect(self._on_back_upload_clicked)
 
+        # Double click to open analysis
+        self.navigator_list.itemDoubleClicked.connect(self._on_open_analysis_clicked)
+
+        # Initial boot check
+        self._load_from_state()
+
     @Slot(str)
     def _on_page_changed(self, page_name: str):
         if page_name == "batch_explorer":
             self._load_from_state()
+        else:
+            self._save_to_session()
 
     def _load_from_state(self):
         results_dir = state.batch_results_dir
         if not results_dir or not os.path.exists(results_dir):
+            self.left_panel.setVisible(False)
+            self.center_panel.setVisible(False)
+            self.right_panel.setVisible(False)
+            self._placeholder.setVisible(True)
             return
+
+        self._placeholder.setVisible(False)
+        self.left_panel.setVisible(True)
+        self.center_panel.setVisible(True)
+        self.right_panel.setVisible(True)
 
         logger.info("BatchExplorer: Loading batch results from %s", results_dir)
         self.batch_dir = Path(results_dir)
         
-        # Determine files and settings
-        summary_csv = self.batch_dir / "batch_summary.csv"
-        manifest_json = self.batch_dir / "run_manifest.json"
-        
-        self.records = []
-        self.manifest_data = {}
-        
-        # Load run manifest
-        if manifest_json.exists():
-            try:
-                import json
-                with open(manifest_json, mode="r", encoding="utf-8") as f:
-                    self.manifest_data = json.load(f)
-            except Exception as e:
-                logger.error("BatchExplorer: Failed to load manifest: %s", e)
+        session = state.workspace_manager.get_batch_session(results_dir)
+        if session:
+            logger.info("BatchExplorer: Restoring from persistent batch session state.")
+            self._restore_from_session(session)
+        else:
+            state.workspace_manager.start_batch_session(results_dir)
+            # Determine files and settings
+            summary_csv = self.batch_dir / "batch_summary.csv"
+            manifest_json = self.batch_dir / "run_manifest.json"
+            
+            self.records = []
+            self.manifest_data = {}
+            
+            # Load run manifest
+            if manifest_json.exists():
+                try:
+                    import json
+                    with open(manifest_json, mode="r", encoding="utf-8") as f:
+                        self.manifest_data = json.load(f)
+                except Exception as e:
+                    logger.error("BatchExplorer: Failed to load manifest: %s", e)
 
-        # Load summary CSV
-        if summary_csv.exists():
-            try:
-                with open(summary_csv, mode="r", newline="", encoding="utf-8") as f:
-                    reader = csv.DictReader(f)
-                    for row in reader:
-                        self.records.append(row)
-            except Exception as e:
-                logger.error("BatchExplorer: Failed to load CSV summary: %s", e)
+            # Load summary CSV
+            if summary_csv.exists():
+                try:
+                    with open(summary_csv, mode="r", newline="", encoding="utf-8") as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
+                            self.records.append(row)
+                except Exception as e:
+                    logger.error("BatchExplorer: Failed to load CSV summary: %s", e)
+            
+            # Clear search and reset list
+            self.search_bar.blockSignals(True)
+            self.search_bar.clear()
+            self.search_bar.blockSignals(False)
+            
+            self._populate_list(select_default=True)
+
+    def _save_to_session(self):
+        results_dir = state.batch_results_dir
+        if not results_dir:
+            return
+            
+        session = state.workspace_manager.start_batch_session(results_dir)
+        session.records = self.records
+        session.manifest_data = self.manifest_data
+        session.search_text = self.search_bar.text()
+        session.sort_by = self.sort_combo.currentText()
+        session.show_original_image = self.show_original_chk.isChecked()
+        session.show_segmentation_overlay = self.show_overlay_chk.isChecked()
+        session.mask_opacity = self.opacity_slider.value()
         
-        # Clear search and reset list
+        curr_item = self.navigator_list.currentItem()
+        if curr_item:
+            rec = curr_item.data(Qt.UserRole)
+            session.selected_filename = rec.get("image_name") if rec else None
+        else:
+            session.selected_filename = None
+            
+        v = self.image_viewer
+        if v.pixmap_item and not v.pixmap_item.pixmap().isNull():
+            session.viewer_state = {
+                "transform": v.transform(),
+                "h_scroll": v.horizontalScrollBar().value(),
+                "v_scroll": v.verticalScrollBar().value(),
+                "initial_fit_scale": v._initial_fit_scale,
+                "zoom_touched": v._zoom_touched
+            }
+        else:
+            session.viewer_state = None
+        logger.info("BatchExplorer: Saved batch session to workspace manager.")
+
+    def _restore_from_session(self, session):
+        self.records = session.records
+        self.manifest_data = session.manifest_data
+        
+        # Block signals to prevent premature triggers
+        self.navigator_list.blockSignals(True)
         self.search_bar.blockSignals(True)
-        self.search_bar.clear()
-        self.search_bar.blockSignals(False)
+        self.sort_combo.blockSignals(True)
+        self.show_original_chk.blockSignals(True)
+        self.show_overlay_chk.blockSignals(True)
+        self.opacity_slider.blockSignals(True)
         
-        self._populate_list()
+        self.search_bar.setText(session.search_text)
+        self.sort_combo.setCurrentText(session.sort_by)
+        self.show_original_chk.setChecked(session.show_original_image)
+        self.show_overlay_chk.setChecked(session.show_segmentation_overlay)
+        self.opacity_slider.setValue(session.mask_opacity)
+        self.opacity_val_lbl.setText(f"{session.mask_opacity}%")
+        
+        self.navigator_list.blockSignals(False)
+        self.search_bar.blockSignals(False)
+        self.sort_combo.blockSignals(False)
+        self.show_original_chk.blockSignals(False)
+        self.show_overlay_chk.blockSignals(False)
+        self.opacity_slider.blockSignals(False)
+        
+        # Populate navigator list with filters applied, but do NOT select first item by default
+        self._populate_list(select_default=False)
+        
+        # Set temp viewer state for the selection change trigger
+        self._temp_restore_viewer_state = session.viewer_state
+        
+        # Select the saved item
+        if session.selected_filename:
+            found_item = None
+            for idx in range(self.navigator_list.count()):
+                item = self.navigator_list.item(idx)
+                rec = item.data(Qt.UserRole)
+                if rec and rec.get("image_name") == session.selected_filename:
+                    found_item = item
+                    break
+            if found_item:
+                self.navigator_list.setCurrentItem(found_item)
+                self.navigator_list.scrollToItem(found_item)
+            else:
+                if self.navigator_list.count() > 0:
+                    self.navigator_list.setCurrentRow(0)
+        else:
+            if self.navigator_list.count() > 0:
+                self.navigator_list.setCurrentRow(0)
 
-    def _populate_list(self):
+    def _on_search_changed(self, text: str):
+        self._populate_list()
+        self._save_to_session()
+
+    def _on_sort_changed(self, text: str):
+        self._populate_list()
+        self._save_to_session()
+
+    def _on_show_original_changed(self, checked: bool):
+        self.image_viewer.set_show_original(checked)
+        self._save_to_session()
+
+    def _on_show_overlay_changed(self, checked: bool):
+        self.image_viewer.set_show_overlay(checked)
+        self._save_to_session()
+
+    def _populate_list(self, select_default=True):
         self.navigator_list.clear()
         self.image_viewer.clear()
         self.image_viewer.set_analysis_results(None)
@@ -443,7 +635,7 @@ class BatchResultsExplorerPage(QWidget):
             self.navigator_list.setItemWidget(item, row_widget)
 
         # Select first item by default if items exist
-        if self.navigator_list.count() > 0:
+        if select_default and self.navigator_list.count() > 0:
             self.navigator_list.setCurrentRow(0)
 
     def _on_selection_changed(self, current_item: QListWidgetItem, previous_item: QListWidgetItem):
@@ -456,6 +648,7 @@ class BatchResultsExplorerPage(QWidget):
 
         record = current_item.data(Qt.UserRole)
         self._load_record_details(record)
+        self._save_to_session()
 
     def _load_record_details(self, record: dict):
         self._clear_metadata_panel()
@@ -542,9 +735,14 @@ class BatchResultsExplorerPage(QWidget):
                 pixmap = QPixmap(str(preview_png_path))
                 logger.info("BatchExplorer: Fallback preview overlay PNG displayed.")
 
+        # Check if we have a temporary viewer state to restore
+        restore_state = getattr(self, "_temp_restore_viewer_state", None)
+        if hasattr(self, "_temp_restore_viewer_state"):
+            del self._temp_restore_viewer_state
+
         # Set Display
         if not pixmap.isNull():
-            self.image_viewer.set_image(pixmap)
+            self.image_viewer.set_image(pixmap, restore_state=restore_state)
             if masks is not None:
                 self.image_viewer.set_masks(masks)
                 # Re-apply current controls state
@@ -706,6 +904,9 @@ class BatchResultsExplorerPage(QWidget):
         # Set analysis results last so they are preserved
         state.analysis_results = results
         
+        # Save batch session before redirecting
+        self._save_to_session()
+        
         # 4. Redirect to analysis page
         navigation_service.navigate_to("analysis")
 
@@ -716,6 +917,10 @@ class BatchResultsExplorerPage(QWidget):
     def _sync_theme(self, theme_name: str = ""):
         theme = theme_name if theme_name else theme_service.current_theme
         self.image_viewer.sync_theme(theme)
+        if hasattr(self, '_placeholder'):
+            self._placeholder.sync_theme(theme)
+        if hasattr(self, 'workspace_switcher'):
+            self.workspace_switcher.sync_theme(theme)
 
         # Style components matching theme
         if theme == "light":

@@ -17,39 +17,39 @@ Modern biological research generates massive amounts of microscopy imaging data 
 
 ## Current Stable Features
 
-### 📡 Image Handling & Profiling Intelligence
+###  Image Handling & Profiling Intelligence
 - **Intelligent Modality Detection**: Automatically inspects file metadata and pixel arrays on import. It classifies the image type (e.g., *Fluorescence Microscopy*, *Brightfield Microscopy*, *Colony Plates*) using heuristic structural and keyword metrics.
 - **16-bit to 8-bit Display Normalization**: Desktop displays can only render 8-bit grayscale channels. Lumen automatically scales 16-bit high-dynamic-range TIFF microscopy images down to 8-bit display buffers using a robust **1st/99th percentile contrast-stretching** algorithm. Flat or low-signal images are protected by a division-by-zero safeguard.
 - **Metadata Extraction**: Instantly extracts and displays pixel resolution, channel dimensions, data type, bit depth, and classification properties.
 
-### 🔬 Interactive Viewer System
+###  Interactive Viewer System
 - **Scientific Image Viewer**: Features a high-performance, zoomable, and pannable graphics canvas custom-tailored for large biological image inspection.
 - **Mask Overlays**: Generates high-contrast, random-seeded pseudocolor segmentation masks rendered directly on top of the original grayscale channel at adjustable opacity (default 40%).
 - **Micro-Inspection Tooltips**: Double-clicking fits the image to the window. Single-clicking any segmented cell on the canvas instantly highlights its boundary and displays quantitative info (Cell ID, Area in pixels, Diameter, and Centroid coordinates) via a hovering tooltip.
 
-### 🧠 Workflow Intelligence & Routing
+###  Workflow Intelligence & Routing
 - **Microscopy-Aware Model Routing**: Based on the detected modality and filename keywords, Lumen automatically routes files to the most appropriate neural weights (e.g., routing DAPI nuclei stains to the `nuclei` model, and GFP cell bodies to the `cyto` model).
 - **Automated Workflow Recommendations**: Detects user files and selects matching workflow templates (like Cell Counting/Sizing or Colony counting).
 
-### 🧬 Deep Learning Segmentation
+###  Deep Learning Segmentation
 - **Cellpose Inference Integration**: Centered completely on local Cellpose v3.0+ deep learning model evaluations.
 - **GPU/CUDA Acceleration**: Automatically detects local NVIDIA GPU hardware and runs deep learning inference using CUDA.
 - **CPU Fallback**: Gracefully detects systems without PyTorch-compatible CUDA graphics cards, logging backend switches and running on the CPU with custom presets to optimize execution times.
 - **Quality Mode Presets**: Supports four pre-configured presets (*Fast*, *Balanced*, *Sensitive*, and *Precise*) which adjust model hyperparameters (flow threshold, cell probability threshold, resample passes) for different performance requirements.
 - **Architectural Cleanup**: To maintain scientific integrity, all deprecated legacy classical pipelines (**Fast Segmentation**, **Manual Segmentation**, and **Smart Segmentation**) have been completely removed from the routing registry to eliminate oversegmentation and marker starvation issues.
 
-### 📊 Stable Batch Processing
+###  Stable Batch Processing
 - **Queue System**: Process entire folders of microscopy images sequentially using background threads.
 - **Validated Scale**: Tested and validated on sequential **200-image batch runs** on Windows systems, producing consistent output datasets without memory leaks.
 - **Resumability**: Automatically skips files that already have complete output artifacts inside the destination directory, facilitating safe recovery from power or system failures.
 
-### 📥 Data Export System
+###  Data Export System
 - **Tabular Data (CSV)**: Saves detailed spreadsheets listing per-cell dimensions (Cell ID, Area, Diameter, Centroid X/Y).
 - **Visual Previews (PNG)**: Blends gray channel frames with custom colored outline segments.
 - **Scientific Mask TIFFs**: Saves raw 16-bit integer label mask files where the pixel intensity matches the Cell ID, suitable for downstream analysis in CellProfiler or Fiji.
 - **A4 PDF Reports**: Generates professional PDF reports including run metadata, summary metrics (mean/median area, average diameter, cell density), visual overlay figures, and tables of the top 10 largest cells.
 
-### ⚙️ Desktop State & Session Persistence
+###  Desktop State & Session Persistence
 - **SQL Settings Backend**: Persists window geometry, active styling themes (Light/Dark mode), and directory access preferences across application runs.
 - **Transient State Reset**: Automatically resets transient parameters (like display opacities and quality combobox selections) on loading new images to prevent stale parameter leakage.
 

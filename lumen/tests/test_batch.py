@@ -506,11 +506,17 @@ class TestLumenBatchPipeline(unittest.TestCase):
         self.assertEqual(explorer.navigator_list.item(1).data(Qt.UserRole)["image_name"], "img_A.tif")
         self.assertEqual(explorer.navigator_list.item(2).data(Qt.UserRole)["image_name"], "img_C.tif")
         
-        # Test Search filtering: search "img_B"
+        # Test Search filtering: search "img_B" (debounced)
         explorer.search_bar.setText("img_B")
+        if hasattr(explorer, 'search_timer') and explorer.search_timer.isActive():
+            explorer.search_timer.stop()
+            explorer._on_search_changed()
         self.assertEqual(explorer.navigator_list.count(), 1)
         self.assertEqual(explorer.navigator_list.item(0).data(Qt.UserRole)["image_name"], "img_B.tif")
         explorer.search_bar.clear()
+        if hasattr(explorer, 'search_timer') and explorer.search_timer.isActive():
+            explorer.search_timer.stop()
+            explorer._on_search_changed()
         
         # Test Analysis Workspace Redirection
         # Select img_B and click "Open in Analysis Workspace"

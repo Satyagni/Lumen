@@ -460,6 +460,7 @@ class AnalysisPage(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._loaded_image_path = None
         self._setup_ui()
         self._init_connections()
         self._sync_theme()
@@ -790,6 +791,9 @@ class AnalysisPage(QWidget):
         # Connect Segmentation state change listener slots
         state.segmentation_method_changed.connect(self._on_state_segmentation_method_changed)
         
+        # Invalidate loaded image cache on analysis results changes
+        state.analysis_completed.connect(self._invalidate_analysis_cache)
+        
         # Initial boot check
         self._sync_state()
 
@@ -802,6 +806,33 @@ class AnalysisPage(QWidget):
             
         session = state.workspace_manager.get_analysis_session(image_path)
         if session:
+            # Check if session values match current state and page is already loaded
+            state_matches_session = (
+                state.quality_mode == session.quality_mode and
+                state.mask_opacity == session.mask_opacity and
+                state.show_original_image == session.show_original_image and
+                state.show_segmentation_overlay == session.show_segmentation_overlay and
+                state.segmentation_method == session.segmentation_method and
+                state.current_workflow == session.current_workflow and
+                state.analysis_results is session.analysis_results
+            )
+            
+            # Also check if the page's widgets match the session
+            # (Just in case the widgets were modified or the test reset them)
+            widgets_match_session = (
+                self.quality_combo.currentText() == session.quality_mode and
+                self.opacity_slider.value() == session.mask_opacity and
+                self.show_original_chk.isChecked() == session.show_original_image and
+                self.show_overlay_chk.isChecked() == session.show_segmentation_overlay
+            )
+            
+            if (hasattr(self, "_loaded_image_path") and 
+                self._loaded_image_path == image_path and 
+                state_matches_session and 
+                widgets_match_session):
+                logger.info("AnalysisPage: Image path %s already loaded and matches session. Skipping sync.", image_path)
+                return
+
             logger.info("AnalysisPage: Restoring from persistent session state.")
             state.quality_mode = session.quality_mode
             state.mask_opacity = session.mask_opacity
@@ -813,6 +844,12 @@ class AnalysisPage(QWidget):
             
             self._restore_from_session(session)
         else:
+            if (hasattr(self, "_loaded_image_path") and 
+                self._loaded_image_path == image_path and 
+                self.image_viewer._analysis_results is state.analysis_results):
+                logger.info("AnalysisPage: Image path %s already loaded (no session). Skipping sync.", image_path)
+                return
+
             state.workspace_manager.start_analysis_session(image_path)
             self._on_image_loaded(image_path)
             if state.current_workflow:
@@ -888,6 +925,8 @@ class AnalysisPage(QWidget):
                 
                 if session.current_workflow:
                     self._on_workflow_selected(session.current_workflow)
+                    
+                self._loaded_image_path = path
 
     # Slots to update state from controls
     def _on_show_original_toggled(self, checked: bool):
@@ -986,9 +1025,11 @@ class AnalysisPage(QWidget):
 
                 self.run_btn.setEnabled(True)
                 self.run_btn.setCursor(QCursor(Qt.PointingHandCursor))
+                self._loaded_image_path = path
                 return
         
         # Clear/empty state
+        self._loaded_image_path = None
         self.image_viewer.clear()
         self.image_viewer.set_analysis_results(None)
         self.viewer_contrast_lbl.setVisible(False)
@@ -1149,6 +1190,11 @@ class AnalysisPage(QWidget):
             self._sync_state()
         else:
             self._save_to_session()
+
+    @Slot()
+    def _invalidate_analysis_cache(self, *args, **kwargs):
+        logger.info("AnalysisPage: Invalidating loaded image cache due to analysis results update.")
+        self._loaded_image_path = None
 
     @Slot(str)
     def _on_analysis_failed(self, error_msg: str):

@@ -33,6 +33,17 @@ The following systems have been **completely cleaned and deleted** from the repo
 
 ## 3. Recent Fixes
 
+### Batch Explorer Filename Search Instability Fix (v0.1.1)
+- **Problem**: Using the filename search filter box in the Batch Explorer caused the application to crash or become highly unstable during rapid typing.
+- **Root Cause**:
+  1. Every typed character synchronously triggered repopulation of the navigator list. Rebuilding the list triggered multiple overlapping `currentItemChanged` signals synchronously, forcing redundant and expensive disk reads (TIFFs, CSVs), overlay processing, and canvas redraws on the main thread for each keystroke.
+  2. Subscripting records directly (`rec["image_name"]`) risked crash hazards on malformed or empty metadata records.
+- **Resolution**:
+  - Implemented a **250ms debounce timer** using `QTimer` to delay search execution until the user finishes typing.
+  - Enforced signal blocking (`navigator_list.blockSignals(True)`) during list clearing and element insertion to prevent intermediate selection-change events.
+  - Restored the active list selection cleanly if the selected item remains in the filtered list after typing.
+  - Added robust validation to check for valid record structures before subscripting fields.
+
 ### Threading GUI Crash Fix (v0.1.0)
 - **Problem**: Clicking "Run Analysis" on Cellpose caused an immediate, silent app crash with no traceback in the terminal.
 - **Root Cause**: `AnalysisWorker` is a `QThread` instantiated on the main thread, resulting in main-thread affinity. Signals connected using default `.connect()` parameters defaulted to `DirectConnection`. When the thread emitted updates, callbacks executed directly on the worker thread, causing fatal C++ segfaults when modifying GUI widgets.

@@ -133,9 +133,16 @@ class BatchResultsExplorerPage(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._loaded_batch_dir = None
         self.batch_dir = None
         self.records = []
         self.manifest_data = {}
+
+        # Debounce timer for search queries
+        from PySide6.QtCore import QTimer
+        self.search_timer = QTimer(self)
+        self.search_timer.setSingleShot(True)
+        self.search_timer.setInterval(250) # 250ms debounce delay
 
         self._setup_ui()
         self._init_connections()
@@ -381,8 +388,9 @@ class BatchResultsExplorerPage(QWidget):
         state.page_changed.connect(self._on_page_changed)
         state.theme_changed.connect(self._sync_theme)
 
-        # Search and sorting
-        self.search_bar.textChanged.connect(self._on_search_changed)
+        # Search and sorting (debounced)
+        self.search_bar.textChanged.connect(self._on_search_text_changed)
+        self.search_timer.timeout.connect(self._on_search_changed)
         self.sort_combo.currentTextChanged.connect(self._on_sort_changed)
 
         # Selection handler
@@ -405,6 +413,10 @@ class BatchResultsExplorerPage(QWidget):
         # Double click to open analysis
         self.navigator_list.itemDoubleClicked.connect(self._on_open_analysis_clicked)
 
+        # Invalidate batch cache when a new batch starts or finishes
+        state.batch_started.connect(self._invalidate_batch_cache)
+        state.batch_finished.connect(self._invalidate_batch_cache)
+
         # Initial boot check
         self._load_from_state()
 
@@ -415,6 +427,39 @@ class BatchResultsExplorerPage(QWidget):
         else:
             self._save_to_session()
 
+    @Slot()
+    def _invalidate_batch_cache(self, *args, **kwargs):
+        logger.info("BatchExplorer: Invalidating loaded batch directory cache due to batch state update.")
+        self._loaded_batch_dir = None
+
+    def _ui_matches_session(self, session) -> bool:
+        if not session:
+            return False
+        
+        # If records are empty but session has them, they don't match
+        if not self.records and session.records:
+            return False
+            
+        # Check widgets
+        if self.search_bar.text() != session.search_text:
+            return False
+        if self.sort_combo.currentText() != session.sort_by:
+            return False
+        if self.opacity_slider.value() != session.mask_opacity:
+            return False
+            
+        # Check if the selected item matches session's selected filename
+        curr_item = self.navigator_list.currentItem()
+        curr_filename = None
+        if curr_item:
+            rec = curr_item.data(Qt.UserRole)
+            curr_filename = rec.get("image_name") if rec else None
+            
+        if curr_filename != session.selected_filename:
+            return False
+            
+        return True
+
     def _load_from_state(self):
         results_dir = state.batch_results_dir
         if not results_dir or not os.path.exists(results_dir):
@@ -422,6 +467,14 @@ class BatchResultsExplorerPage(QWidget):
             self.center_panel.setVisible(False)
             self.right_panel.setVisible(False)
             self._placeholder.setVisible(True)
+            self._loaded_batch_dir = None
+            return
+
+        session = state.workspace_manager.get_batch_session(results_dir)
+        if (hasattr(self, "_loaded_batch_dir") and 
+            self._loaded_batch_dir == results_dir and 
+            self._ui_matches_session(session)):
+            logger.info("BatchExplorer: Batch directory %s already loaded and matches session. Skipping load.", results_dir)
             return
 
         self._placeholder.setVisible(False)
@@ -470,6 +523,8 @@ class BatchResultsExplorerPage(QWidget):
             self.search_bar.blockSignals(False)
             
             self._populate_list(select_default=True)
+
+        self._loaded_batch_dir = results_dir
 
     def _save_to_session(self):
         results_dir = state.batch_results_dir
@@ -556,7 +611,10 @@ class BatchResultsExplorerPage(QWidget):
             if self.navigator_list.count() > 0:
                 self.navigator_list.setCurrentRow(0)
 
-    def _on_search_changed(self, text: str):
+    def _on_search_text_changed(self, text: str):
+        self.search_timer.start()
+
+    def _on_search_changed(self):
         self._populate_list()
         self._save_to_session()
 
@@ -573,6 +631,15 @@ class BatchResultsExplorerPage(QWidget):
         self._save_to_session()
 
     def _populate_list(self, select_default=True):
+        # 1. Save current selection before clearing
+        selected_name = None
+        curr_item = self.navigator_list.currentItem()
+        if curr_item:
+            rec = curr_item.data(Qt.UserRole)
+            selected_name = rec.get("image_name") if rec else None
+
+        # Block signals to prevent intermediate currentItemChanged triggers during clearing and item insertion
+        self.navigator_list.blockSignals(True)
         self.navigator_list.clear()
         self.image_viewer.clear()
         self.image_viewer.set_analysis_results(None)
@@ -585,7 +652,7 @@ class BatchResultsExplorerPage(QWidget):
         # Sort copy of records list
         sorted_records = list(self.records)
         if sort_by == "Alphabetical":
-            sorted_records.sort(key=lambda x: x["image_name"].lower())
+            sorted_records.sort(key=lambda x: x.get("image_name", "").lower())
         elif sort_by == "Cell Count":
             sorted_records.sort(key=lambda x: int(x.get("cell_count") or 0), reverse=True)
         elif sort_by == "Processing Time":
@@ -595,8 +662,13 @@ class BatchResultsExplorerPage(QWidget):
 
         theme = theme_service.current_theme
         
+        target_item = None
         for rec in sorted_records:
-            filename = rec["image_name"]
+            if not rec:
+                continue
+            filename = rec.get("image_name", "")
+            if not filename:
+                continue
             if search_text and search_text not in filename.lower():
                 continue
 
@@ -633,10 +705,23 @@ class BatchResultsExplorerPage(QWidget):
 
             self.navigator_list.addItem(item)
             self.navigator_list.setItemWidget(item, row_widget)
+            
+            # Check if this is the item to restore selection to
+            if selected_name and filename == selected_name:
+                target_item = item
 
-        # Select first item by default if items exist
-        if select_default and self.navigator_list.count() > 0:
-            self.navigator_list.setCurrentRow(0)
+        # Unblock signals
+        self.navigator_list.blockSignals(False)
+
+        # 2. Restore selection or select default
+        if select_default:
+            if target_item:
+                self.navigator_list.setCurrentItem(target_item)
+            elif self.navigator_list.count() > 0:
+                self.navigator_list.setCurrentRow(0)
+            else:
+                # Clear viewer and metadata explicitly if no items match
+                self._on_selection_changed(None, None)
 
     def _on_selection_changed(self, current_item: QListWidgetItem, previous_item: QListWidgetItem):
         if not current_item:
@@ -647,6 +732,13 @@ class BatchResultsExplorerPage(QWidget):
             return
 
         record = current_item.data(Qt.UserRole)
+        if not record:
+            self._clear_metadata_panel()
+            self.image_viewer.clear()
+            self.image_viewer.set_analysis_results(None)
+            self.open_analysis_btn.setEnabled(False)
+            return
+
         self._load_record_details(record)
         self._save_to_session()
 

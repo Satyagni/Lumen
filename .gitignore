@@ -1,0 +1,83 @@
+# Python bytecode & cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.env
+.env.local
+
+# IDE configurations
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Application logs
+logs/
+*.log
+
+# Build & distribution packages
+build/
+dist/
+*.egg-info/
+.eggs/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+
+# Test & linting cache
+.pytest_cache/
+.mypy_cache/
+.tox/
+.coverage
+htmlcov/
+
+# Local databases and caches
+*.db
+*.sqlite3
+
+# Torch / Machine Learning weights & cache
+.cache/
+.cellpose/
+.torch/
+
+# Temporary run outputs & scratch directories
+scratch/
+temp_test_*/
+batch_results/
+
+# Large scientific microscopy datasets
+*.tif
+*.tiff
+*.nd2
+*.czi
+*.lif
+*.ims
+*.oib
+*.oif
+*.zvi
+*.lsm

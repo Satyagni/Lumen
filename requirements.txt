@@ -1,0 +1,7 @@
+PySide6>=6.5.0
+tifffile
+numpy
+pillow
+cellpose<4.0.0
+torch
+packaging

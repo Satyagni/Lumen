@@ -741,6 +741,12 @@ class AnalysisPage(QWidget):
         right_layout.addWidget(self.progress_bar)
 
         # Action Buttons
+        self.edit_btn = QPushButton("✏ Edit Masks")
+        self.edit_btn.setObjectName("EditMasksButton")
+        self.edit_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        self.edit_btn.setEnabled(False)
+        right_layout.addWidget(self.edit_btn)
+
         self.run_btn = QPushButton("Run Analysis")
         self.run_btn.setObjectName("RunAnalysisButton")
         self.run_btn.setProperty("class", "PrimaryButton")
@@ -766,6 +772,9 @@ class AnalysisPage(QWidget):
     def _init_connections(self):
         # Trigger actual Cellpose analysis on click
         self.run_btn.clicked.connect(self._on_run_analysis_clicked)
+        
+        # Trigger manual editing workspace dialog on click
+        self.edit_btn.clicked.connect(self._on_edit_masks_clicked)
         
         # Connect visual controls updates
         self.show_original_chk.toggled.connect(self._on_show_original_toggled)
@@ -908,6 +917,11 @@ class AnalysisPage(QWidget):
                         self.image_viewer.set_show_original(session.show_original_image)
                         self.image_viewer.set_show_overlay(session.show_segmentation_overlay)
                         self.image_viewer.set_mask_opacity(session.mask_opacity)
+                        self.edit_btn.setEnabled(True)
+                    else:
+                        self.edit_btn.setEnabled(False)
+                else:
+                    self.edit_btn.setEnabled(False)
                 
                 meta = image_manager.get_metadata()
                 if meta:
@@ -1009,6 +1023,11 @@ class AnalysisPage(QWidget):
                     masks = state.analysis_results.get("masks")
                     if masks is not None:
                         self.image_viewer.set_masks(masks)
+                        self.edit_btn.setEnabled(True)
+                    else:
+                        self.edit_btn.setEnabled(False)
+                else:
+                    self.edit_btn.setEnabled(False)
                 
                 # Extract simplified metadata fields
                 meta = image_manager.get_metadata()
@@ -1035,6 +1054,7 @@ class AnalysisPage(QWidget):
         self.viewer_contrast_lbl.setVisible(False)
         self.meta_placeholder.setVisible(True)
         self.meta_container.setVisible(False)
+        self.edit_btn.setEnabled(False)
         
         self.run_btn.setEnabled(False)
         self.run_btn.setCursor(QCursor(Qt.ArrowCursor))
@@ -1169,20 +1189,12 @@ class AnalysisPage(QWidget):
         masks = results.get("masks")
         if masks is not None:
             self.image_viewer.set_masks(masks)
+            self.edit_btn.setEnabled(True)
+        else:
+            self.edit_btn.setEnabled(False)
             
         # Trigger lightweight session checkpoint save
         self._save_to_session()
-            
-        QMessageBox.information(
-            self,
-            "Analysis Completed",
-            "Segmentation and analysis completed successfully!",
-            QMessageBox.Ok
-        )
-        
-        # Navigate to Results view
-        from lumen.core.services.navigation_service import navigation_service
-        navigation_service.navigate_to("results")
 
     @Slot(str)
     def _on_page_changed(self, page_name: str):
@@ -1195,6 +1207,47 @@ class AnalysisPage(QWidget):
     def _invalidate_analysis_cache(self, *args, **kwargs):
         logger.info("AnalysisPage: Invalidating loaded image cache due to analysis results update.")
         self._loaded_image_path = None
+
+    @Slot()
+    def _on_edit_masks_clicked(self):
+        image_path = state.current_image_path
+        results = state.analysis_results
+        
+        if not image_path or not results or "masks" not in results:
+            return
+            
+        original_mask = results["masks"]
+        if original_mask is None:
+            return
+            
+        from lumen.ui.mask_editor_dialog import MaskEditorDialog, update_results_mask
+        from PySide6.QtWidgets import QDialog
+        
+        editor = MaskEditorDialog(image_path, original_mask, self)
+        res = editor.exec()
+        
+        if res == QDialog.Accepted:
+            edited_mask = editor.canvas.working_mask
+            if edited_mask is not None:
+                # Update masks & cell count only (simplified Phase 1 MVP)
+                updated_results = update_results_mask(results, edited_mask)
+                
+                # Write to state (which saves to session & resets cache via signal)
+                state.analysis_results = updated_results
+                
+                # Directly update viewer
+                self.image_viewer.set_analysis_results(updated_results)
+                self.image_viewer.set_masks(edited_mask)
+                
+                # Save session checkpoint
+                self._save_to_session()
+                
+                QMessageBox.information(
+                    self,
+                    "Masks Saved",
+                    "Manual mask corrections committed successfully.",
+                    QMessageBox.Ok
+                )
 
     @Slot(str)
     def _on_analysis_failed(self, error_msg: str):
@@ -1273,6 +1326,24 @@ class AnalysisPage(QWidget):
             self.ch_val.setStyleSheet("color: #4B5563; font-size: 12px;")
             self.mode_val.setStyleSheet("color: #4B5563; font-size: 12px;")
             self.type_val.setStyleSheet("color: #4F46E5; font-size: 12px; font-weight: 600;")
+            
+            self.edit_btn.setStyleSheet("""
+                QPushButton {
+                    padding: 8px;
+                    background-color: #FFFFFF;
+                    border: 1px solid #D1D5DB;
+                    color: #4B5563;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 11px;
+                }
+                QPushButton:hover { background-color: #F3F4F6; }
+                QPushButton:disabled {
+                    background-color: #F9FAFB;
+                    border: 1px solid #E5E7EB;
+                    color: #9CA3AF;
+                }
+            """)
             
             self.wf_title.setStyleSheet("font-weight: bold; font-size: 12px; color: #4F46E5;")
             self.right_panel.findChildren(QLabel)[0].setStyleSheet("font-size: 15px; font-weight: bold; color: #111827;")
@@ -1353,6 +1424,24 @@ class AnalysisPage(QWidget):
             self.ch_val.setStyleSheet("color: #E5E7EB; font-size: 12px;")
             self.mode_val.setStyleSheet("color: #E5E7EB; font-size: 12px;")
             self.type_val.setStyleSheet("color: #6366F1; font-size: 12px; font-weight: 600;")
+            
+            self.edit_btn.setStyleSheet("""
+                QPushButton {
+                    padding: 8px;
+                    background-color: #24242B;
+                    border: 1px solid #2B2B35;
+                    color: #D1D5DB;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 11px;
+                }
+                QPushButton:hover { background-color: #2D2D37; color: #FFFFFF; }
+                QPushButton:disabled {
+                    background-color: #16161A;
+                    border: 1px solid #222227;
+                    color: #4B5563;
+                }
+            """)
             
             self.wf_title.setStyleSheet("font-weight: bold; font-size: 12px; color: #6366F1;")
             self.right_panel.findChildren(QLabel)[0].setStyleSheet("font-size: 15px; font-weight: bold; color: #FFFFFF;")

@@ -101,9 +101,9 @@ class TestManualSegmentationMVP(unittest.TestCase):
         # new_id should be 9 (max is 8 + 1)
         self.assertEqual(canvas.selected_label_id, 9)
         
-        # Test delete_selected_cell
+        # Test delete_selected_cells
         canvas.selected_label_id = 8
-        canvas.delete_selected_cell()
+        canvas.delete_selected_cells()
         self.assertIsNone(canvas.selected_label_id)
         self.assertFalse(np.any(canvas.working_mask == 8))
 

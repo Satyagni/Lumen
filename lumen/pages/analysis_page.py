@@ -802,6 +802,7 @@ class AnalysisPage(QWidget):
         
         # Invalidate loaded image cache on analysis results changes
         state.analysis_completed.connect(self._invalidate_analysis_cache)
+        state.analysis_results_updated.connect(self._invalidate_analysis_cache)
         
         # Initial boot check
         self._sync_state()
@@ -1229,11 +1230,11 @@ class AnalysisPage(QWidget):
         if res == QDialog.Accepted:
             edited_mask = editor.canvas.working_mask
             if edited_mask is not None:
-                # Update masks & cell count only (simplified Phase 1 MVP)
+                # Update masks, cell_count, cell_metrics, areas, diameters, and densities
                 updated_results = update_results_mask(results, edited_mask)
                 
-                # Write to state (which saves to session & resets cache via signal)
-                state.analysis_results = updated_results
+                # Write to state bypass property setter side-effects (avoiding analysis_completed.emit)
+                state._analysis_results = updated_results
                 
                 # Directly update viewer
                 self.image_viewer.set_analysis_results(updated_results)
@@ -1241,6 +1242,172 @@ class AnalysisPage(QWidget):
                 
                 # Save session checkpoint
                 self._save_to_session()
+                
+                # ------------------------------------------------
+                # Batch Synchronization (Feature 4)
+                # ------------------------------------------------
+                active_batch_dir = state.batch_results_dir
+                if not active_batch_dir:
+                    active_batch_dir = state.workspace_manager._active_batch_dir
+                
+                if active_batch_dir:
+                    filename = os.path.basename(image_path)
+                    img_folder = Path(active_batch_dir) / filename
+                    if img_folder.exists():
+                        logger.info("AnalysisPage: Syncing edited mask to batch results: %s", img_folder)
+                        labels_path = img_folder / f"{filename}_labels_raw.tif"
+                        csv_path = img_folder / f"{filename}_cell_metrics.csv"
+                        preview_path = img_folder / f"{filename}_overlay_preview.png"
+                        
+                        try:
+                            import tifffile
+                            import csv
+                            from pathlib import Path
+                            
+                            # 1. Save raw masks
+                            tifffile.imwrite(str(labels_path), edited_mask.astype(np.uint16))
+                            
+                            # 2. Save cell metrics CSV
+                            from lumen.pages.results_page import export_cell_metrics_csv
+                            export_cell_metrics_csv(str(csv_path), updated_results["cell_metrics"])
+                            
+                            # 3. Save visual overlay preview
+                            from lumen.pages.results_page import generate_overlay_image
+                            generate_overlay_image(image_path, edited_mask).save(str(preview_path))
+                            
+                            # 4. Update memory session records
+                            batch_session = state.workspace_manager.get_batch_session(active_batch_dir)
+                            if not batch_session:
+                                batch_session = state.workspace_manager.start_batch_session(active_batch_dir)
+                            
+                            if batch_session:
+                                # Pre-populate records if empty (e.g. fresh start)
+                                if not batch_session.records:
+                                    summary_csv = Path(active_batch_dir) / "batch_summary.csv"
+                                    if summary_csv.exists():
+                                        with open(summary_csv, mode="r", newline="", encoding="utf-8") as f:
+                                            reader = csv.DictReader(f)
+                                            batch_session.records = list(reader)
+                                            
+                                # Pre-populate manifest if empty
+                                if not batch_session.manifest_data:
+                                    manifest_json = Path(active_batch_dir) / "run_manifest.json"
+                                    if manifest_json.exists():
+                                        import json
+                                        with open(manifest_json, mode="r", encoding="utf-8") as f:
+                                            batch_session.manifest_data = json.load(f)
+                                
+                                # Update list records
+                                for rec in batch_session.records:
+                                    if rec.get("image_name") == filename:
+                                        rec["edited"] = True
+                                        rec["cell_count"] = str(updated_results["cell_count"])
+                                        rec["mean_area_px"] = f"{updated_results['mean_cell_area_px']:.2f}"
+                                        rec["median_area_px"] = f"{updated_results['median_cell_area_px']:.2f}"
+                                        rec["average_diameter_px"] = f"{updated_results['average_diameter_px']:.2f}"
+                                        rec["cell_density"] = f"{updated_results['cell_density']:.2e}"
+                                        rec["status"] = "SUCCESS"
+                                        
+                                # Update manifest data
+                                if "images" in batch_session.manifest_data:
+                                    for img_rec in batch_session.manifest_data["images"]:
+                                        if img_rec.get("image_name") == filename:
+                                            img_rec["edited"] = True
+                                            img_rec["cell_count"] = updated_results["cell_count"]
+                                            img_rec["mean_area_px"] = updated_results["mean_cell_area_px"]
+                                            img_rec["median_area_px"] = updated_results["median_cell_area_px"]
+                                            img_rec["average_diameter_px"] = updated_results["average_diameter_px"]
+                                            img_rec["cell_density"] = updated_results["cell_density"]
+                                            img_rec["status"] = "SUCCESS"
+                                            
+                            # 5. Update batch_summary.csv on disk
+                            summary_csv = Path(active_batch_dir) / "batch_summary.csv"
+                            if summary_csv.exists():
+                                summary_records = []
+                                with open(summary_csv, mode="r", newline="", encoding="utf-8") as sf:
+                                    reader = csv.DictReader(sf)
+                                    fields = reader.fieldnames
+                                    for row in reader:
+                                        if row.get("image_name") == filename:
+                                            row["cell_count"] = str(updated_results["cell_count"])
+                                            row["mean_area_px"] = f"{updated_results['mean_cell_area_px']:.2f}"
+                                            row["median_area_px"] = f"{updated_results['median_cell_area_px']:.2f}"
+                                            row["average_diameter_px"] = f"{updated_results['average_diameter_px']:.2f}"
+                                            row["cell_density"] = f"{updated_results['cell_density']:.2e}"
+                                            row["status"] = "SUCCESS"
+                                        summary_records.append(row)
+                                        
+                                with open(summary_csv, mode="w", newline="", encoding="utf-8") as sf:
+                                    writer = csv.DictWriter(sf, fieldnames=fields)
+                                    writer.writeheader()
+                                    for row in summary_records:
+                                        writer.writerow(row)
+                                        
+                            # 6. Update run_manifest.json on disk
+                            manifest_json = Path(active_batch_dir) / "run_manifest.json"
+                            if manifest_json.exists():
+                                import json
+                                with open(manifest_json, mode="r", encoding="utf-8") as mf:
+                                    mdata = json.load(mf)
+                                if "images" in mdata:
+                                    for img_rec in mdata["images"]:
+                                        if img_rec.get("image_name") == filename:
+                                            img_rec["cell_count"] = updated_results["cell_count"]
+                                            img_rec["mean_area_px"] = updated_results["mean_cell_area_px"]
+                                            img_rec["median_area_px"] = updated_results["median_cell_area_px"]
+                                            img_rec["average_diameter_px"] = updated_results["average_diameter_px"]
+                                            img_rec["cell_density"] = updated_results["cell_density"]
+                                            img_rec["status"] = "SUCCESS"
+                                            img_rec["edited"] = True
+                                with open(manifest_json, mode="w", encoding="utf-8") as mf:
+                                    json.dump(mdata, mf, indent=2)
+                                    
+                            # 7. Invalidate batch explorer cache to force UI refresh
+                            # Walk up parents to find main window with batch_explorer_page
+                            p = self.parent()
+                            main_win = None
+                            while p:
+                                if hasattr(p, "batch_explorer_page"):
+                                    main_win = p
+                                    break
+                                p = p.parent()
+                                
+                            if main_win:
+                                main_win.batch_explorer_page._loaded_batch_dir = None
+                                
+                        except Exception as ex:
+                            logger.error("AnalysisPage: Failed to synchronize batch records: %s", ex, exc_info=True)
+                
+                # Emit explicit manual correction update signals
+                state.analysis_results_updated.emit(updated_results)
+                state.manual_mask_saved.emit(image_path)
+
+                # ------------------------------------------------
+                # Selection Synchronization (Feature 7)
+                # ------------------------------------------------
+                selected_cell_id = editor.canvas.selected_label_id
+                if selected_cell_id is not None and selected_cell_id > 0:
+                    if np.any(edited_mask == selected_cell_id):
+                        self.image_viewer._highlight_cell(selected_cell_id, edited_mask)
+                        
+                        # Show updated tooltip at centroid of the selected cell
+                        metrics_dict = updated_results.get("cell_metrics", {})
+                        cell_info = metrics_dict.get(selected_cell_id)
+                        if cell_info:
+                            area = cell_info["area_px"]
+                            diam = cell_info["diameter_px"]
+                            cx, cy = cell_info["centroid"]
+                            tooltip_text = (
+                                f"<b>Cell ID:</b> {selected_cell_id}<br/>"
+                                f"<b>Area:</b> {area} px<br/>"
+                                f"<b>Diameter:</b> {diam} px<br/>"
+                                f"<b>Centroid:</b> ({cx}, {cy})"
+                            )
+                            # Mapped scene centroid to viewport coordinate
+                            view_pos = self.image_viewer.mapFromScene(cx, cy)
+                            global_pos = self.image_viewer.viewport().mapToGlobal(view_pos)
+                            from PySide6.QtWidgets import QToolTip
+                            QToolTip.showText(global_pos, tooltip_text, self.image_viewer)
                 
                 QMessageBox.information(
                     self,

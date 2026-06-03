@@ -108,20 +108,35 @@ class MaskEditorCanvas(QGraphicsView):
 
         self.working_mask = None
         self.color_lut = None
-        self.brush_mode = "add"
+        self.brush_mode = "pointer"  # Default checked
         self.brush_size = 10
         
         # Object-aware selection state
-        self.selected_label_id = None
+        self.selected_labels = set()
+        self._selected_label_id = None
 
         # Capped undo/redo stacks (max 10 items)
         self.undo_stack = []
         self.redo_stack = []
 
+    @property
+    def selected_label_id(self):
+        return self._selected_label_id
+
+    @selected_label_id.setter
+    def selected_label_id(self, val):
+        self._selected_label_id = val
+        if val is not None and val > 0:
+            if val not in self.selected_labels:
+                self.selected_labels = {val}
+        else:
+            self.selected_labels.clear()
+
     def set_data(self, pixmap: QPixmap, mask_arr: np.ndarray, color_lut: np.ndarray):
         """Loads Raw pixmap and segmentation mask array into drawing scene."""
         self.working_mask = mask_arr
         self.color_lut = color_lut
+        self.selected_labels.clear()
         self.selected_label_id = None
         
         # Clear selection overlay if present
@@ -161,7 +176,7 @@ class MaskEditorCanvas(QGraphicsView):
         self.mask_item.setVisible(True)
 
     def update_selection_highlight(self):
-        """Draws a boundary highlight around the selected cell label."""
+        """Draws a boundary highlight around all selected cell labels."""
         if self.selection_item:
             try:
                 self.scene.removeItem(self.selection_item)
@@ -169,11 +184,12 @@ class MaskEditorCanvas(QGraphicsView):
                 pass
             self.selection_item = None
             
-        if self.working_mask is None or self.selected_label_id is None or self.selected_label_id == 0:
+        if self.working_mask is None or not self.selected_labels:
             return
             
-        # Find coordinates of the selected label
-        rows, cols = np.where(self.working_mask == self.selected_label_id)
+        # Find coordinates of all selected labels
+        sel_mask = np.isin(self.working_mask, list(self.selected_labels))
+        rows, cols = np.where(sel_mask)
         if len(rows) == 0:
             return
             
@@ -190,11 +206,12 @@ class MaskEditorCanvas(QGraphicsView):
         
         for r in range(sub_h):
             for c in range(sub_w):
-                if sub_mask[r, c] == self.selected_label_id:
+                val = sub_mask[r, c]
+                if val in self.selected_labels:
                     is_boundary = False
                     for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                         nr, nc = r + dr, c + dc
-                        if nr < 0 or nr >= sub_h or nc < 0 or nc >= sub_w or sub_mask[nr, nc] != self.selected_label_id:
+                        if nr < 0 or nr >= sub_h or nc < 0 or nc >= sub_w or sub_mask[nr, nc] != val:
                             is_boundary = True
                             break
                     
@@ -239,10 +256,15 @@ class MaskEditorCanvas(QGraphicsView):
             self.redo_stack.append(self.working_mask.copy())
             self.working_mask = self.undo_stack.pop()
             
-            # Keep selection valid if cell still exists
-            if self.selected_label_id is not None:
-                if not np.any(self.working_mask == self.selected_label_id):
-                    self.selected_label_id = None
+            # Keep selection valid if cells still exist
+            still_valid = set()
+            for label in self.selected_labels:
+                if np.any(self.working_mask == label):
+                    still_valid.add(label)
+            self.selected_labels = still_valid
+            
+            if self.selected_label_id not in self.selected_labels:
+                self.selected_label_id = list(self.selected_labels)[0] if self.selected_labels else None
             
             self.update_selection_highlight()
             self.update_mask_overlay()
@@ -255,10 +277,15 @@ class MaskEditorCanvas(QGraphicsView):
             self.undo_stack.append(self.working_mask.copy())
             self.working_mask = self.redo_stack.pop()
             
-            # Keep selection valid if cell still exists
-            if self.selected_label_id is not None:
-                if not np.any(self.working_mask == self.selected_label_id):
-                    self.selected_label_id = None
+            # Keep selection valid if cells still exist
+            still_valid = set()
+            for label in self.selected_labels:
+                if np.any(self.working_mask == label):
+                    still_valid.add(label)
+            self.selected_labels = still_valid
+            
+            if self.selected_label_id not in self.selected_labels:
+                self.selected_label_id = list(self.selected_labels)[0] if self.selected_labels else None
                     
             self.update_selection_highlight()
             self.update_mask_overlay()
@@ -281,8 +308,8 @@ class MaskEditorCanvas(QGraphicsView):
         dist_sq = (X - cx)**2 + (Y - cy)**2
         
         if value == 0: # Erase brush
-            if self.selected_label_id is not None:
-                mask_to_erase = (dist_sq <= r**2) & (self.working_mask[y_min:y_max, x_min:x_max] == self.selected_label_id)
+            if self.selected_labels:
+                mask_to_erase = (dist_sq <= r**2) & np.isin(self.working_mask[y_min:y_max, x_min:x_max], list(self.selected_labels))
                 self.working_mask[y_min:y_max, x_min:x_max][mask_to_erase] = 0
         else: # Add brush
             mask_to_paint = dist_sq <= r**2
@@ -305,14 +332,30 @@ class MaskEditorCanvas(QGraphicsView):
                 self.draw_brush_circle(cx, cy, radius, value)
 
     # ----------------------------------------------------
-    # Deletion & Insertion helpers
+    # Deletion, Insertion & Merging helpers
     # ----------------------------------------------------
-    def delete_selected_cell(self):
-        if self.working_mask is None or self.selected_label_id is None:
+    def delete_selected_cells(self):
+        if self.working_mask is None or not self.selected_labels:
             return
         self.push_undo()
-        self.working_mask[self.working_mask == self.selected_label_id] = 0
+        for label in self.selected_labels:
+            self.working_mask[self.working_mask == label] = 0
+        self.selected_labels.clear()
         self.selected_label_id = None
+        self.update_selection_highlight()
+        self.update_mask_overlay()
+        self.selection_changed.emit()
+
+    def merge_selected_cells(self):
+        if self.working_mask is None or len(self.selected_labels) < 2:
+            return
+        self.push_undo()
+        surviving_id = min(self.selected_labels)
+        for label in self.selected_labels:
+            if label != surviving_id:
+                self.working_mask[self.working_mask == label] = surviving_id
+        self.selected_labels = {surviving_id}
+        self.selected_label_id = surviving_id
         self.update_selection_highlight()
         self.update_mask_overlay()
         self.selection_changed.emit()
@@ -323,6 +366,7 @@ class MaskEditorCanvas(QGraphicsView):
         # Generate a brand new label ID
         new_id = int(np.max(self.working_mask) + 1) if self.working_mask.size > 0 else 1
         self.ensure_lut_color(new_id)
+        self.selected_labels = {new_id}
         self.selected_label_id = new_id
         self.update_selection_highlight()
         self.selection_changed.emit()
@@ -349,20 +393,52 @@ class MaskEditorCanvas(QGraphicsView):
             if 0 <= cx < w and 0 <= cy < h:
                 clicked_label = self.working_mask[cy, cx]
                 
-                # Mode A: Select Cell on press if they click a cell
-                if clicked_label > 0:
-                    self.selected_label_id = int(clicked_label)
-                    self.update_selection_highlight()
-                    self.selection_changed.emit()
-                    
-                # Mode B: Paint or erase on selected cell
-                if self.selected_label_id is not None:
-                    self.push_undo()
-                    self.drawing = True
-                    self.last_scene_pos = (cx, cy)
-                    draw_value = 0 if self.brush_mode == "erase" else self.selected_label_id
-                    self.draw_brush_circle(cx, cy, self.brush_size, draw_value)
-                    self.update_mask_overlay()
+                if self.brush_mode == "pointer":
+                    # Mode A: Selection ONLY in Pointer Mode
+                    if clicked_label > 0:
+                        if event.modifiers() & Qt.ControlModifier:
+                            if int(clicked_label) in self.selected_labels:
+                                self.selected_labels.remove(int(clicked_label))
+                            else:
+                                self.selected_labels.add(int(clicked_label))
+                        else:
+                            self.selected_labels = {int(clicked_label)}
+                            
+                        self.selected_label_id = list(self.selected_labels)[0] if self.selected_labels else None
+                        self.update_selection_highlight()
+                        self.selection_changed.emit()
+                    else:
+                        # Clicked empty space
+                        if not (event.modifiers() & Qt.ControlModifier):
+                            self.selected_labels.clear()
+                            self.selected_label_id = None
+                            self.update_selection_highlight()
+                            self.selection_changed.emit()
+                        
+                    # Drag to pan in pointer mode
+                    self._is_panning = True
+                    self._pan_start_x = event.position().x()
+                    self._pan_start_y = event.position().y()
+                    self._h_bar_start = self.horizontalScrollBar().value()
+                    self._v_bar_start = self.verticalScrollBar().value()
+                    self.setCursor(Qt.ClosedHandCursor)
+                else:
+                    # Brush mode (Add / Erase)
+                    # Auto-select the clicked cell if none was selected and we clicked a cell
+                    if self.selected_label_id is None and clicked_label > 0:
+                        self.selected_labels = {int(clicked_label)}
+                        self.selected_label_id = int(clicked_label)
+                        self.update_selection_highlight()
+                        self.selection_changed.emit()
+
+                    # Mode B: Paint or erase on selected cell (NO Ctrl required)
+                    if self.selected_label_id is not None:
+                        self.push_undo()
+                        self.drawing = True
+                        self.last_scene_pos = (cx, cy)
+                        draw_value = 0 if self.brush_mode == "erase" else self.selected_label_id
+                        self.draw_brush_circle(cx, cy, self.brush_size, draw_value)
+                        self.update_mask_overlay()
 
             event.accept()
             return
@@ -377,7 +453,10 @@ class MaskEditorCanvas(QGraphicsView):
         if self.working_mask is not None:
             r = self.brush_size
             self.brush_cursor_item.setRect(cx - r, cy - r, 2 * r, 2 * r)
-            self.brush_cursor_item.show()
+            if self.brush_mode != "pointer":
+                self.brush_cursor_item.show()
+            else:
+                self.brush_cursor_item.hide()
 
         if getattr(self, "_is_panning", False):
             dx = event.position().x() - self._pan_start_x
@@ -413,10 +492,11 @@ class MaskEditorCanvas(QGraphicsView):
             if getattr(self, "drawing", False):
                 self.drawing = False
                 self.last_scene_pos = None
-                
-                # Update highlight and status after finishing draw stroke
                 self.update_selection_highlight()
                 self.selection_changed.emit()
+            elif getattr(self, "_is_panning", False):
+                self._is_panning = False
+                self.setCursor(Qt.ArrowCursor)
             event.accept()
             return
 
@@ -477,6 +557,9 @@ class MaskEditorDialog(QDialog):
         self.setWindowTitle("Manual Mask Refinement")
         self.setMinimumSize(1000, 700)
         self.setObjectName("MaskEditorDialog")
+        
+        # Maximize and minimize flags
+        self.setWindowFlags(self.windowFlags() | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
 
         # Copy original masks for non-destructive session staging
         self.original_mask = original_mask
@@ -515,7 +598,7 @@ class MaskEditorDialog(QDialog):
         header = QHBoxLayout()
         title_lbl = QLabel("Manual Mask Refinement")
         title_lbl.setStyleSheet("font-size: 15px; font-weight: bold;")
-        hint_lbl = QLabel("Click a cell to select and edit. Right-click and drag to pan viewport.")
+        hint_lbl = QLabel("Pointer: left-click to select / drag to pan. Add/Erase: edit selected cells.")
         hint_lbl.setStyleSheet("font-size: 11px; color: #9CA3AF;")
         header.addWidget(title_lbl)
         header.addStretch(1)
@@ -540,18 +623,24 @@ class MaskEditorDialog(QDialog):
         self.btn_group = QButtonGroup(self)
         self.btn_group.setExclusive(True)
 
-        self.add_btn = QPushButton("✏ Add")
+        self.pointer_btn = QPushButton("🔍 Pointer")
+        self.pointer_btn.setCheckable(True)
+        self.pointer_btn.setChecked(True)
+        self.pointer_btn.setCursor(Qt.PointingHandCursor)
+
+        self.add_btn = QPushButton("✏ Add Brush")
         self.add_btn.setCheckable(True)
-        self.add_btn.setChecked(True)
         self.add_btn.setCursor(Qt.PointingHandCursor)
 
-        self.erase_btn = QPushButton("🧽 Erase")
+        self.erase_btn = QPushButton("🧽 Erase Brush")
         self.erase_btn.setCheckable(True)
         self.erase_btn.setCursor(Qt.PointingHandCursor)
 
+        self.btn_group.addButton(self.pointer_btn)
         self.btn_group.addButton(self.add_btn)
         self.btn_group.addButton(self.erase_btn)
 
+        toolbar_layout.addWidget(self.pointer_btn)
         toolbar_layout.addWidget(self.add_btn)
         toolbar_layout.addWidget(self.erase_btn)
 
@@ -565,16 +654,21 @@ class MaskEditorDialog(QDialog):
         self.new_cell_btn = QPushButton("➕ New Cell")
         self.new_cell_btn.setCursor(Qt.PointingHandCursor)
         
-        self.delete_btn = QPushButton("❌ Delete Cell")
+        self.delete_btn = QPushButton("❌ Delete Selected")
         self.delete_btn.setObjectName("DeleteCellButton")
         self.delete_btn.setCursor(Qt.PointingHandCursor)
         self.delete_btn.setEnabled(False)
+
+        self.merge_btn = QPushButton("🔗 Merge Selected")
+        self.merge_btn.setCursor(Qt.PointingHandCursor)
+        self.merge_btn.setEnabled(False)
 
         self.reset_btn = QPushButton("🔄 Reset All")
         self.reset_btn.setCursor(Qt.PointingHandCursor)
 
         toolbar_layout.addWidget(self.new_cell_btn)
         toolbar_layout.addWidget(self.delete_btn)
+        toolbar_layout.addWidget(self.merge_btn)
         toolbar_layout.addWidget(self.reset_btn)
 
         # Separator after Actions
@@ -634,6 +728,7 @@ class MaskEditorDialog(QDialog):
         self.canvas.set_data(self.pixmap, self.working_mask, self.color_lut)
 
         # Connect actions
+        self.pointer_btn.clicked.connect(self._set_pointer_mode)
         self.add_btn.clicked.connect(self._set_add_mode)
         self.erase_btn.clicked.connect(self._set_erase_mode)
         self.size_slider.valueChanged.connect(self._on_size_changed)
@@ -644,8 +739,12 @@ class MaskEditorDialog(QDialog):
         
         self.new_cell_btn.clicked.connect(self._on_new_cell_clicked)
         self.delete_btn.clicked.connect(self._on_delete_cell_clicked)
+        self.merge_btn.clicked.connect(self._on_merge_clicked)
         self.reset_btn.clicked.connect(self._on_reset_all_clicked)
         self.canvas.selection_changed.connect(self._update_selection_status)
+
+    def _set_pointer_mode(self):
+        self.canvas.brush_mode = "pointer"
 
     def _set_add_mode(self):
         self.canvas.brush_mode = "add"
@@ -663,7 +762,10 @@ class MaskEditorDialog(QDialog):
         self.canvas.brush_mode = "add"
 
     def _on_delete_cell_clicked(self):
-        self.canvas.delete_selected_cell()
+        self.canvas.delete_selected_cells()
+
+    def _on_merge_clicked(self):
+        self.canvas.merge_selected_cells()
 
     def _on_reset_all_clicked(self):
         from PySide6.QtWidgets import QMessageBox
@@ -677,21 +779,24 @@ class MaskEditorDialog(QDialog):
         if reply == QMessageBox.Yes:
             self.canvas.push_undo()
             self.canvas.working_mask.fill(0)
+            self.canvas.selected_labels.clear()
             self.canvas.selected_label_id = None
             self.canvas.update_selection_highlight()
             self.canvas.update_mask_overlay()
             self.canvas.selection_changed.emit()
 
     def _update_selection_status(self):
-        sel_id = self.canvas.selected_label_id
+        sel_count = len(self.canvas.selected_labels)
         theme = theme_service.current_theme
         color = "#4F46E5" if theme == "light" else "#818CF8"
         
-        if sel_id is None or sel_id == 0:
+        if sel_count == 0:
             self.status_info_lbl.setText("No cell selected. Click a cell to edit, or click '➕ New Cell'.")
             self.status_info_lbl.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {color}; margin-left: 4px;")
             self.delete_btn.setEnabled(False)
-        else:
+            self.merge_btn.setEnabled(False)
+        elif sel_count == 1:
+            sel_id = self.canvas.selected_label_id
             if self.canvas.working_mask is not None:
                 pixel_count = np.sum(self.canvas.working_mask == sel_id)
             else:
@@ -703,6 +808,68 @@ class MaskEditorDialog(QDialog):
                 self.status_info_lbl.setText(f"Active Cell: #{sel_id} (Size: {pixel_count} px)")
             self.status_info_lbl.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {color}; margin-left: 4px;")
             self.delete_btn.setEnabled(True)
+            self.merge_btn.setEnabled(False)
+        else:
+            self.status_info_lbl.setText(f"Multi-Selection Active: {sel_count} cells selected.")
+            self.status_info_lbl.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {color}; margin-left: 4px;")
+            self.delete_btn.setEnabled(True)
+            self.merge_btn.setEnabled(True)
+
+    def has_unsaved_changes(self) -> bool:
+        return self.canvas.working_mask is not None and not np.array_equal(self.canvas.working_mask, self.original_mask)
+
+    def closeEvent(self, event):
+        if self.has_unsaved_changes():
+            from PySide6.QtWidgets import QMessageBox
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Unsaved Changes")
+            msg_box.setText("You have unsaved manual mask modifications.\nDo you want to save changes before closing?")
+            msg_box.setIcon(QMessageBox.Question)
+            
+            save_btn = msg_box.addButton("Save", QMessageBox.AcceptRole)
+            discard_btn = msg_box.addButton("Discard", QMessageBox.DestructiveRole)
+            cancel_btn = msg_box.addButton("Cancel", QMessageBox.RejectRole)
+            
+            msg_box.setDefaultButton(save_btn)
+            msg_box.exec()
+            
+            clicked = msg_box.clickedButton()
+            if clicked == save_btn:
+                self.accept()
+            elif clicked == discard_btn:
+                self.canvas.working_mask = self.original_mask.copy()
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            event.accept()
+
+    def reject(self):
+        if self.has_unsaved_changes():
+            from PySide6.QtWidgets import QMessageBox
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Unsaved Changes")
+            msg_box.setText("You have unsaved manual mask modifications.\nDo you want to save changes before closing?")
+            msg_box.setIcon(QMessageBox.Question)
+            
+            save_btn = msg_box.addButton("Save", QMessageBox.AcceptRole)
+            discard_btn = msg_box.addButton("Discard", QMessageBox.DestructiveRole)
+            cancel_btn = msg_box.addButton("Cancel", QMessageBox.RejectRole)
+            
+            msg_box.setDefaultButton(save_btn)
+            msg_box.exec()
+            
+            clicked = msg_box.clickedButton()
+            if clicked == save_btn:
+                self.accept()
+            elif clicked == discard_btn:
+                self.canvas.working_mask = self.original_mask.copy()
+                super().reject()
+            else:
+                # Cancel (remain in editor)
+                pass
+        else:
+            super().reject()
 
     def _sync_theme(self):
         theme = theme_service.current_theme
@@ -732,6 +899,7 @@ class MaskEditorDialog(QDialog):
             self.redo_btn.setStyleSheet(button_style)
             self.new_cell_btn.setStyleSheet(button_style)
             self.reset_btn.setStyleSheet(button_style)
+            self.merge_btn.setStyleSheet(button_style)
 
             self.delete_btn.setStyleSheet("""
                 QPushButton {
@@ -748,6 +916,23 @@ class MaskEditorDialog(QDialog):
                     background-color: #F9FAFB;
                     border: 1px solid #E5E7EB;
                     color: #9CA3AF;
+                }
+            """)
+
+            self.pointer_btn.setStyleSheet("""
+                QPushButton {
+                    padding: 6px 12px;
+                    background-color: #FFFFFF;
+                    border: 1px solid #D1D5DB;
+                    color: #374151;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 11px;
+                }
+                QPushButton:checked {
+                    background-color: #6B7280;
+                    color: #FFFFFF;
+                    border: 1px solid #4B5563;
                 }
             """)
 
@@ -833,6 +1018,7 @@ class MaskEditorDialog(QDialog):
             self.redo_btn.setStyleSheet(button_style)
             self.new_cell_btn.setStyleSheet(button_style)
             self.reset_btn.setStyleSheet(button_style)
+            self.merge_btn.setStyleSheet(button_style)
 
             self.delete_btn.setStyleSheet("""
                 QPushButton {
@@ -849,6 +1035,23 @@ class MaskEditorDialog(QDialog):
                     background-color: #16161A;
                     border: 1px solid #222227;
                     color: #4B5563;
+                }
+            """)
+
+            self.pointer_btn.setStyleSheet("""
+                QPushButton {
+                    padding: 6px 12px;
+                    background-color: #24242B;
+                    border: 1px solid #2B2B35;
+                    color: #9CA3AF;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 11px;
+                }
+                QPushButton:checked {
+                    background-color: #4B5563;
+                    color: #FFFFFF;
+                    border: 1px solid #374151;
                 }
             """)
 

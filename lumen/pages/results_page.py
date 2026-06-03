@@ -243,6 +243,7 @@ class ResultsPage(QWidget):
 
     def _init_connections(self):
         state.analysis_completed.connect(self._on_analysis_completed)
+        state.analysis_results_updated.connect(self._on_analysis_completed)
         state.theme_changed.connect(self._sync_theme)
         
         # Connect export actions

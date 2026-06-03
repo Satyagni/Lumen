@@ -413,9 +413,10 @@ class BatchResultsExplorerPage(QWidget):
         # Double click to open analysis
         self.navigator_list.itemDoubleClicked.connect(self._on_open_analysis_clicked)
 
-        # Invalidate batch cache when a new batch starts or finishes
+        # Invalidate batch cache when a new batch starts or finishes, or when a manual mask is saved
         state.batch_started.connect(self._invalidate_batch_cache)
         state.batch_finished.connect(self._invalidate_batch_cache)
+        state.manual_mask_saved.connect(self._invalidate_batch_cache)
 
         # Initial boot check
         self._load_from_state()
@@ -516,6 +517,13 @@ class BatchResultsExplorerPage(QWidget):
                             self.records.append(row)
                 except Exception as e:
                     logger.error("BatchExplorer: Failed to load CSV summary: %s", e)
+            
+            # Sync edited status from manifest into records
+            if self.manifest_data and "images" in self.manifest_data:
+                edited_images = {img.get("image_name") for img in self.manifest_data["images"] if img.get("edited")}
+                for rec in self.records:
+                    if rec.get("image_name") in edited_images:
+                        rec["edited"] = True
             
             # Clear search and reset list
             self.search_bar.blockSignals(True)
@@ -681,7 +689,8 @@ class BatchResultsExplorerPage(QWidget):
             row_layout.setContentsMargins(8, 6, 8, 6)
             row_layout.setSpacing(8)
 
-            name_lbl = QLabel(filename)
+            display_name = f"{filename} ✏ Edited" if rec.get("edited") else filename
+            name_lbl = QLabel(display_name)
             if theme == "light":
                 name_lbl.setStyleSheet("font-size: 11px; font-weight: bold; color: #111827;")
             else:

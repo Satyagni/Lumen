@@ -98,6 +98,8 @@ class AppState(QObject):
     workflow_selected = Signal(str)       # Emitted when workflow configuration changes
     analysis_started = Signal()           # Emitted when mock analysis is triggered
     analysis_completed = Signal(dict)     # Emitted when analysis completes with mock data
+    manual_mask_saved = Signal(str)           # Emitted when manual mask changes are saved (image_path)
+    analysis_results_updated = Signal(dict)   # Emitted when analysis results are updated manually (results)
     sidebar_toggled = Signal(bool)        # Emitted when sidebar expands/collapses
     backend_changed = Signal(str)         # Emitted when GPU/CPU backend status updates
     backend_preference_changed = Signal(str) # Emitted when backend preference changes

@@ -341,7 +341,8 @@ class BatchProcessingManager(QObject):
                 "used_gpu": "CUDA" if results.get("used_gpu") else "CPU",
                 "requested_backend": self.resolved_backend if seg_method != "AI Segmentation" else self.parameters.get("backend_preference", "Use Global Setting"),
                 "resolved_backend": results.get("resolved_backend", "CPU"),
-                "status": "SUCCESS"
+                "status": "SUCCESS",
+                "edited": False
             }
             self.summary_records.append(record)
             self.completed_count += 1
@@ -401,7 +402,8 @@ class BatchProcessingManager(QObject):
             "used_gpu": "-",
             "requested_backend": self.parameters.get("backend_preference", "Use Global Setting"),
             "resolved_backend": "-",
-            "status": status_msg
+            "status": status_msg,
+            "edited": False
         }
 
     def _check_existing_outputs(self, image_path: str) -> bool:
@@ -463,6 +465,22 @@ class BatchProcessingManager(QObject):
             pref = self.parameters.get("backend_preference", "Use Global Setting")
             use_gpu, resolved_name = gpu_service.resolve_execution_backend(pref)
             
+            # Check if this image was previously edited in run_manifest.json
+            is_edited = False
+            manifest_path = Path(self.output_dir) / "run_manifest.json"
+            if manifest_path.exists():
+                try:
+                    import json
+                    with open(manifest_path, mode="r", encoding="utf-8") as mf:
+                        mdata = json.load(mf)
+                    if "images" in mdata:
+                        for img_rec in mdata["images"]:
+                            if img_rec.get("image_name") == image_name:
+                                is_edited = img_rec.get("edited", False) in [True, "True", "true", 1, "1"]
+                                break
+                except Exception:
+                    pass
+            
             return {
                 "image_name": image_name,
                 "workflow": state.current_workflow or "Cell Counting",
@@ -477,7 +495,8 @@ class BatchProcessingManager(QObject):
                 "used_gpu": "CUDA" if use_gpu else "CPU",
                 "requested_backend": pref,
                 "resolved_backend": resolved_name,
-                "status": "SKIPPED_ALREADY_EXISTS"
+                "status": "SKIPPED_ALREADY_EXISTS",
+                "edited": is_edited
             }
         except Exception as e:
             logger.error("BatchManager: Failed to parse existing CSV for %s: %s", image_name, e)
@@ -533,7 +552,8 @@ class BatchProcessingManager(QObject):
         fields = [
             "image_name", "workflow", "segmentation_mode", "model_type",
             "cell_count", "mean_area_px", "median_area_px", "average_diameter_px",
-            "cell_density", "processing_time_s", "used_gpu", "requested_backend", "resolved_backend", "status"
+            "cell_density", "processing_time_s", "used_gpu", "requested_backend", "resolved_backend", "status",
+            "edited"
         ]
         
         try:

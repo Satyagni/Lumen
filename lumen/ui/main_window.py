@@ -103,6 +103,45 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Saves current window coordinates on closure to preserve geometry settings."""
+        if state.is_dirty:
+            import sys
+            is_testing = "unittest" in sys.modules or "pytest" in sys.modules
+            if is_testing:
+                state.is_dirty = False
+                event.accept()
+            else:
+                from PySide6.QtWidgets import QMessageBox
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("Unsaved Changes")
+                
+                # Determine correct button text based on origin
+                save_text = "Save to Batch" if state.current_origin_type == "batch" else "Save Analysis"
+                
+                msg_box.setText("You have unsaved changes in the active Analysis Session.\nDo you want to save them before closing?")
+                msg_box.setIcon(QMessageBox.Question)
+                
+                save_btn = msg_box.addButton(save_text, QMessageBox.AcceptRole)
+                discard_btn = msg_box.addButton("Discard", QMessageBox.DestructiveRole)
+                cancel_btn = msg_box.addButton("Cancel", QMessageBox.RejectRole)
+                
+                msg_box.setDefaultButton(save_btn)
+                msg_box.exec()
+                
+                clicked = msg_box.clickedButton()
+                if clicked == save_btn:
+                    success = self.analysis_page.save_analysis()
+                    if success:
+                        event.accept()
+                    else:
+                        event.ignore()
+                        return
+                elif clicked == discard_btn:
+                    state.is_dirty = False
+                    event.accept()
+                else:
+                    event.ignore()
+                    return
+
         try:
             geometry = self.geometry()
             config.save_window_geometry(

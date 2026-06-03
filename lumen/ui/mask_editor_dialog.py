@@ -430,6 +430,9 @@ class MaskEditorCanvas(QGraphicsView):
                         self.selected_label_id = int(clicked_label)
                         self.update_selection_highlight()
                         self.selection_changed.emit()
+                    elif self.selected_label_id is None and clicked_label == 0 and self.brush_mode == "add":
+                        # Auto-create new cell if none selected and clicking on empty space in Add Brush mode
+                        self.add_new_cell()
 
                     # Mode B: Paint or erase on selected cell (NO Ctrl required)
                     if self.selected_label_id is not None:
@@ -712,7 +715,7 @@ class MaskEditorDialog(QDialog):
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setCursor(Qt.PointingHandCursor)
 
-        self.save_btn = QPushButton("Save Mask")
+        self.save_btn = QPushButton("Apply Changes")
         self.save_btn.setCursor(Qt.PointingHandCursor)
 
         toolbar_layout.addWidget(self.cancel_btn)
@@ -823,18 +826,18 @@ class MaskEditorDialog(QDialog):
             from PySide6.QtWidgets import QMessageBox
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("Unsaved Changes")
-            msg_box.setText("You have unsaved manual mask modifications.\nDo you want to save changes before closing?")
+            msg_box.setText("You have unsaved manual mask modifications.\nDo you want to apply changes before closing?")
             msg_box.setIcon(QMessageBox.Question)
             
-            save_btn = msg_box.addButton("Save", QMessageBox.AcceptRole)
+            apply_btn = msg_box.addButton("Apply Changes", QMessageBox.AcceptRole)
             discard_btn = msg_box.addButton("Discard", QMessageBox.DestructiveRole)
             cancel_btn = msg_box.addButton("Cancel", QMessageBox.RejectRole)
             
-            msg_box.setDefaultButton(save_btn)
+            msg_box.setDefaultButton(apply_btn)
             msg_box.exec()
             
             clicked = msg_box.clickedButton()
-            if clicked == save_btn:
+            if clicked == apply_btn:
                 self.accept()
             elif clicked == discard_btn:
                 self.canvas.working_mask = self.original_mask.copy()
@@ -849,18 +852,18 @@ class MaskEditorDialog(QDialog):
             from PySide6.QtWidgets import QMessageBox
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("Unsaved Changes")
-            msg_box.setText("You have unsaved manual mask modifications.\nDo you want to save changes before closing?")
+            msg_box.setText("You have unsaved manual mask modifications.\nDo you want to apply changes before closing?")
             msg_box.setIcon(QMessageBox.Question)
             
-            save_btn = msg_box.addButton("Save", QMessageBox.AcceptRole)
+            apply_btn = msg_box.addButton("Apply Changes", QMessageBox.AcceptRole)
             discard_btn = msg_box.addButton("Discard", QMessageBox.DestructiveRole)
             cancel_btn = msg_box.addButton("Cancel", QMessageBox.RejectRole)
             
-            msg_box.setDefaultButton(save_btn)
+            msg_box.setDefaultButton(apply_btn)
             msg_box.exec()
             
             clicked = msg_box.clickedButton()
-            if clicked == save_btn:
+            if clicked == apply_btn:
                 self.accept()
             elif clicked == discard_btn:
                 self.canvas.working_mask = self.original_mask.copy()

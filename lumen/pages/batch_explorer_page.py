@@ -520,7 +520,7 @@ class BatchResultsExplorerPage(QWidget):
             
             # Sync edited status from manifest into records
             if self.manifest_data and "images" in self.manifest_data:
-                edited_images = {img.get("image_name") for img in self.manifest_data["images"] if img.get("edited")}
+                edited_images = {img.get("image_name") for img in self.manifest_data["images"] if img.get("edited") in [True, "True", "true", 1, "1"]}
                 for rec in self.records:
                     if rec.get("image_name") in edited_images:
                         rec["edited"] = True
@@ -689,7 +689,8 @@ class BatchResultsExplorerPage(QWidget):
             row_layout.setContentsMargins(8, 6, 8, 6)
             row_layout.setSpacing(8)
 
-            display_name = f"{filename} ✏ Edited" if rec.get("edited") else filename
+            is_edited = rec.get("edited") in [True, "True", "true", 1, "1"]
+            display_name = f"{filename} ✏ Modified" if is_edited else filename
             name_lbl = QLabel(display_name)
             if theme == "light":
                 name_lbl.setStyleSheet("font-size: 11px; font-weight: bold; color: #111827;")
@@ -863,8 +864,10 @@ class BatchResultsExplorerPage(QWidget):
             val_style = "color: #FFFFFF; font-size: 11px; font-weight: bold;"
             err_style = "color: #F87171; font-size: 11px; font-weight: bold;"
 
+        is_edited = record.get("edited") in [True, "True", "true", 1, "1"]
         fields = [
             ("Filename", record["image_name"]),
+            ("Edited", "Yes (✏ Modified)" if is_edited else "No"),
             ("Status", record.get("status", "SUCCESS")),
             ("Workflow", record.get("workflow", "Cell Counting")),
             ("Mode Preset", record.get("segmentation_mode", "Balanced")),
@@ -999,11 +1002,28 @@ class BatchResultsExplorerPage(QWidget):
         # 3. Write properties to global state
         # Set path first (resets session)
         state.current_image_path = str(raw_image_path)
+        
+        # Start/get the analysis session and tag it immutably as batch-origin
+        session = state.workspace_manager.start_analysis_session(
+            str(raw_image_path),
+            origin_type="batch",
+            batch_origin_context=str(self.batch_dir)
+        )
+        
         # Set workflow and quality mode
         state.current_workflow = record.get("workflow", "cell_counting")
         state.quality_mode = record.get("segmentation_mode", "Balanced")
         # Set analysis results last so they are preserved
         state.analysis_results = results
+        
+        # Populate session attributes so they restore correctly during sync_state
+        session.current_workflow = state.current_workflow
+        session.quality_mode = state.quality_mode
+        session.segmentation_method = state.segmentation_method
+        session.analysis_results = state.analysis_results
+        session.mask_opacity = state.mask_opacity
+        session.show_original_image = state.show_original_image
+        session.show_segmentation_overlay = state.show_segmentation_overlay
         
         # Save batch session before redirecting
         self._save_to_session()

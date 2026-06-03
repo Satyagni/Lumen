@@ -747,6 +747,19 @@ class AnalysisPage(QWidget):
         self.edit_btn.setEnabled(False)
         right_layout.addWidget(self.edit_btn)
 
+        self.save_analysis_btn = QPushButton("💾 Save Analysis")
+        self.save_analysis_btn.setObjectName("SaveAnalysisButton")
+        self.save_analysis_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        self.save_analysis_btn.setEnabled(False)
+        right_layout.addWidget(self.save_analysis_btn)
+
+        self.dirty_lbl = QLabel("")
+        self.dirty_lbl.setObjectName("DirtyStatusLabel")
+        self.dirty_lbl.setAlignment(Qt.AlignCenter)
+        self.dirty_lbl.setVisible(False)
+        self.dirty_lbl.setStyleSheet("color: #ff9800; font-weight: bold; margin: 4px;")
+        right_layout.addWidget(self.dirty_lbl)
+
         self.run_btn = QPushButton("Run Analysis")
         self.run_btn.setObjectName("RunAnalysisButton")
         self.run_btn.setProperty("class", "PrimaryButton")
@@ -804,6 +817,10 @@ class AnalysisPage(QWidget):
         state.analysis_completed.connect(self._invalidate_analysis_cache)
         state.analysis_results_updated.connect(self._invalidate_analysis_cache)
         
+        # Handle dirty state transitions
+        state.dirty_state_changed.connect(self._on_dirty_state_changed)
+        self.save_analysis_btn.clicked.connect(self._on_save_clicked)
+        
         # Initial boot check
         self._sync_state()
 
@@ -813,6 +830,12 @@ class AnalysisPage(QWidget):
         if not image_path:
             self._on_image_loaded("")
             return
+            
+        # Update dynamic save button text based on immutably tagged session origin
+        if state.current_origin_type == "batch":
+            self.save_analysis_btn.setText("💾 Save to Batch")
+        else:
+            self.save_analysis_btn.setText("💾 Save Analysis")
             
         session = state.workspace_manager.get_analysis_session(image_path)
         if session:
@@ -1243,140 +1266,9 @@ class AnalysisPage(QWidget):
                 # Save session checkpoint
                 self._save_to_session()
                 
-                # ------------------------------------------------
-                # Batch Synchronization (Feature 4)
-                # ------------------------------------------------
-                active_batch_dir = state.batch_results_dir
-                if not active_batch_dir:
-                    active_batch_dir = state.workspace_manager._active_batch_dir
-                
-                if active_batch_dir:
-                    filename = os.path.basename(image_path)
-                    img_folder = Path(active_batch_dir) / filename
-                    if img_folder.exists():
-                        logger.info("AnalysisPage: Syncing edited mask to batch results: %s", img_folder)
-                        labels_path = img_folder / f"{filename}_labels_raw.tif"
-                        csv_path = img_folder / f"{filename}_cell_metrics.csv"
-                        preview_path = img_folder / f"{filename}_overlay_preview.png"
-                        
-                        try:
-                            import tifffile
-                            import csv
-                            from pathlib import Path
-                            
-                            # 1. Save raw masks
-                            tifffile.imwrite(str(labels_path), edited_mask.astype(np.uint16))
-                            
-                            # 2. Save cell metrics CSV
-                            from lumen.pages.results_page import export_cell_metrics_csv
-                            export_cell_metrics_csv(str(csv_path), updated_results["cell_metrics"])
-                            
-                            # 3. Save visual overlay preview
-                            from lumen.pages.results_page import generate_overlay_image
-                            generate_overlay_image(image_path, edited_mask).save(str(preview_path))
-                            
-                            # 4. Update memory session records
-                            batch_session = state.workspace_manager.get_batch_session(active_batch_dir)
-                            if not batch_session:
-                                batch_session = state.workspace_manager.start_batch_session(active_batch_dir)
-                            
-                            if batch_session:
-                                # Pre-populate records if empty (e.g. fresh start)
-                                if not batch_session.records:
-                                    summary_csv = Path(active_batch_dir) / "batch_summary.csv"
-                                    if summary_csv.exists():
-                                        with open(summary_csv, mode="r", newline="", encoding="utf-8") as f:
-                                            reader = csv.DictReader(f)
-                                            batch_session.records = list(reader)
-                                            
-                                # Pre-populate manifest if empty
-                                if not batch_session.manifest_data:
-                                    manifest_json = Path(active_batch_dir) / "run_manifest.json"
-                                    if manifest_json.exists():
-                                        import json
-                                        with open(manifest_json, mode="r", encoding="utf-8") as f:
-                                            batch_session.manifest_data = json.load(f)
-                                
-                                # Update list records
-                                for rec in batch_session.records:
-                                    if rec.get("image_name") == filename:
-                                        rec["edited"] = True
-                                        rec["cell_count"] = str(updated_results["cell_count"])
-                                        rec["mean_area_px"] = f"{updated_results['mean_cell_area_px']:.2f}"
-                                        rec["median_area_px"] = f"{updated_results['median_cell_area_px']:.2f}"
-                                        rec["average_diameter_px"] = f"{updated_results['average_diameter_px']:.2f}"
-                                        rec["cell_density"] = f"{updated_results['cell_density']:.2e}"
-                                        rec["status"] = "SUCCESS"
-                                        
-                                # Update manifest data
-                                if "images" in batch_session.manifest_data:
-                                    for img_rec in batch_session.manifest_data["images"]:
-                                        if img_rec.get("image_name") == filename:
-                                            img_rec["edited"] = True
-                                            img_rec["cell_count"] = updated_results["cell_count"]
-                                            img_rec["mean_area_px"] = updated_results["mean_cell_area_px"]
-                                            img_rec["median_area_px"] = updated_results["median_cell_area_px"]
-                                            img_rec["average_diameter_px"] = updated_results["average_diameter_px"]
-                                            img_rec["cell_density"] = updated_results["cell_density"]
-                                            img_rec["status"] = "SUCCESS"
-                                            
-                            # 5. Update batch_summary.csv on disk
-                            summary_csv = Path(active_batch_dir) / "batch_summary.csv"
-                            if summary_csv.exists():
-                                summary_records = []
-                                with open(summary_csv, mode="r", newline="", encoding="utf-8") as sf:
-                                    reader = csv.DictReader(sf)
-                                    fields = reader.fieldnames
-                                    for row in reader:
-                                        if row.get("image_name") == filename:
-                                            row["cell_count"] = str(updated_results["cell_count"])
-                                            row["mean_area_px"] = f"{updated_results['mean_cell_area_px']:.2f}"
-                                            row["median_area_px"] = f"{updated_results['median_cell_area_px']:.2f}"
-                                            row["average_diameter_px"] = f"{updated_results['average_diameter_px']:.2f}"
-                                            row["cell_density"] = f"{updated_results['cell_density']:.2e}"
-                                            row["status"] = "SUCCESS"
-                                        summary_records.append(row)
-                                        
-                                with open(summary_csv, mode="w", newline="", encoding="utf-8") as sf:
-                                    writer = csv.DictWriter(sf, fieldnames=fields)
-                                    writer.writeheader()
-                                    for row in summary_records:
-                                        writer.writerow(row)
-                                        
-                            # 6. Update run_manifest.json on disk
-                            manifest_json = Path(active_batch_dir) / "run_manifest.json"
-                            if manifest_json.exists():
-                                import json
-                                with open(manifest_json, mode="r", encoding="utf-8") as mf:
-                                    mdata = json.load(mf)
-                                if "images" in mdata:
-                                    for img_rec in mdata["images"]:
-                                        if img_rec.get("image_name") == filename:
-                                            img_rec["cell_count"] = updated_results["cell_count"]
-                                            img_rec["mean_area_px"] = updated_results["mean_cell_area_px"]
-                                            img_rec["median_area_px"] = updated_results["median_cell_area_px"]
-                                            img_rec["average_diameter_px"] = updated_results["average_diameter_px"]
-                                            img_rec["cell_density"] = updated_results["cell_density"]
-                                            img_rec["status"] = "SUCCESS"
-                                            img_rec["edited"] = True
-                                with open(manifest_json, mode="w", encoding="utf-8") as mf:
-                                    json.dump(mdata, mf, indent=2)
-                                    
-                            # 7. Invalidate batch explorer cache to force UI refresh
-                            # Walk up parents to find main window with batch_explorer_page
-                            p = self.parent()
-                            main_win = None
-                            while p:
-                                if hasattr(p, "batch_explorer_page"):
-                                    main_win = p
-                                    break
-                                p = p.parent()
-                                
-                            if main_win:
-                                main_win.batch_explorer_page._loaded_batch_dir = None
-                                
-                        except Exception as ex:
-                            logger.error("AnalysisPage: Failed to synchronize batch records: %s", ex, exc_info=True)
+                # Mark dirty only if the editor actually recorded edits (Feature 3)
+                if editor.has_unsaved_changes():
+                    state.is_dirty = True
                 
                 # Emit explicit manual correction update signals
                 state.analysis_results_updated.emit(updated_results)
@@ -1408,13 +1300,201 @@ class AnalysisPage(QWidget):
                             global_pos = self.image_viewer.viewport().mapToGlobal(view_pos)
                             from PySide6.QtWidgets import QToolTip
                             QToolTip.showText(global_pos, tooltip_text, self.image_viewer)
+                            
+    def save_analysis(self) -> bool:
+        """Canonical save authority for the active analysis session."""
+        from pathlib import Path
+        if not state.is_dirty:
+            return True
+            
+        image_path = state.current_image_path
+        results = state.analysis_results
+        if not image_path or not results or "masks" not in results:
+            return False
+            
+        edited_mask = results["masks"]
+        
+        # Behavior depends on ORIGIN CONTEXT
+        if state.current_origin_type == "batch":
+            active_batch_dir = state.current_batch_origin_context
+            if not active_batch_dir:
+                active_batch_dir = state.batch_results_dir
+            if not active_batch_dir:
+                active_batch_dir = state.workspace_manager._active_batch_dir
                 
-                QMessageBox.information(
-                    self,
-                    "Masks Saved",
-                    "Manual mask corrections committed successfully.",
-                    QMessageBox.Ok
-                )
+            filename = os.path.basename(image_path)
+            
+            # Robust active batch directory lookup fallback
+            if not active_batch_dir:
+                for b_dir, session in state.workspace_manager._batch_sessions.items():
+                    if session.records:
+                        for rec in session.records:
+                            if rec.get("image_name", "").lower() == filename.lower():
+                                active_batch_dir = b_dir
+                                break
+                    if active_batch_dir:
+                        break
+                        
+            if not active_batch_dir:
+                candidate = Path(image_path).parent / "batch_results"
+                if candidate.exists() and (candidate / "batch_summary.csv").exists():
+                    active_batch_dir = str(candidate)
+                    
+            if active_batch_dir:
+                img_folder = Path(active_batch_dir) / filename
+                os.makedirs(img_folder, exist_ok=True)
+                
+                logger.info("AnalysisPage: Syncing edited mask to batch results on Save: %s", img_folder)
+                labels_path = img_folder / f"{filename}_labels_raw.tif"
+                csv_path = img_folder / f"{filename}_cell_metrics.csv"
+                preview_path = img_folder / f"{filename}_overlay_preview.png"
+                
+                try:
+                    import tifffile
+                    import csv
+                    import json
+                    
+                    # 1. Save raw masks
+                    tifffile.imwrite(str(labels_path), edited_mask.astype(np.uint16))
+                    
+                    # 2. Save cell metrics CSV
+                    from lumen.pages.results_page import export_cell_metrics_csv
+                    export_cell_metrics_csv(str(csv_path), results["cell_metrics"])
+                    
+                    # 3. Save visual overlay preview
+                    from lumen.pages.results_page import generate_overlay_image
+                    generate_overlay_image(image_path, edited_mask).save(str(preview_path))
+                    
+                    # 4. Update memory session records
+                    batch_session = state.workspace_manager.get_batch_session(active_batch_dir)
+                    if not batch_session:
+                        batch_session = state.workspace_manager.start_batch_session(active_batch_dir)
+                        
+                    if batch_session:
+                        # Pre-populate records if empty (e.g. fresh start)
+                        if not batch_session.records:
+                            summary_csv = Path(active_batch_dir) / "batch_summary.csv"
+                            if summary_csv.exists():
+                                with open(summary_csv, mode="r", newline="", encoding="utf-8") as f:
+                                    reader = csv.DictReader(f)
+                                    batch_session.records = list(reader)
+                                    
+                        # Pre-populate manifest if empty
+                        if not batch_session.manifest_data:
+                            manifest_json = Path(active_batch_dir) / "run_manifest.json"
+                            if manifest_json.exists():
+                                with open(manifest_json, mode="r", encoding="utf-8") as f:
+                                    batch_session.manifest_data = json.load(f)
+                                    
+                        # Update list records
+                        for rec in batch_session.records:
+                            if rec.get("image_name", "").lower() == filename.lower():
+                                rec["edited"] = True
+                                rec["cell_count"] = str(results["cell_count"])
+                                rec["mean_area_px"] = f"{results['mean_cell_area_px']:.2f}"
+                                rec["median_area_px"] = f"{results['median_cell_area_px']:.2f}"
+                                rec["average_diameter_px"] = f"{results['average_diameter_px']:.2f}"
+                                rec["cell_density"] = f"{results['cell_density']:.2e}"
+                                rec["status"] = "SUCCESS"
+                                
+                        # Update manifest data
+                        if "images" in batch_session.manifest_data:
+                            for img_rec in batch_session.manifest_data["images"]:
+                                if img_rec.get("image_name", "").lower() == filename.lower():
+                                    img_rec["edited"] = True
+                                    img_rec["cell_count"] = results["cell_count"]
+                                    img_rec["mean_area_px"] = results["mean_cell_area_px"]
+                                    img_rec["median_area_px"] = results["median_cell_area_px"]
+                                    img_rec["average_diameter_px"] = results["average_diameter_px"]
+                                    img_rec["cell_density"] = results["cell_density"]
+                                    img_rec["status"] = "SUCCESS"
+                                    
+                    # 5. Update batch_summary.csv on disk
+                    summary_csv = Path(active_batch_dir) / "batch_summary.csv"
+                    if summary_csv.exists():
+                        summary_records = []
+                        fields = []
+                        with open(summary_csv, mode="r", newline="", encoding="utf-8") as sf:
+                            reader = csv.DictReader(sf)
+                            fields = list(reader.fieldnames) if reader.fieldnames else []
+                            for row in reader:
+                                if row.get("image_name", "").lower() == filename.lower():
+                                    row["cell_count"] = str(results["cell_count"])
+                                    row["mean_area_px"] = f"{results['mean_cell_area_px']:.2f}"
+                                    row["median_area_px"] = f"{results['median_cell_area_px']:.2f}"
+                                    row["average_diameter_px"] = f"{results['average_diameter_px']:.2f}"
+                                    row["cell_density"] = f"{results['cell_density']:.2e}"
+                                    row["status"] = "SUCCESS"
+                                    row["edited"] = "True"
+                                summary_records.append(row)
+                                
+                        for field_name in ["cell_count", "mean_area_px", "median_area_px", "average_diameter_px", "cell_density", "status", "edited"]:
+                            if field_name not in fields:
+                                fields.append(field_name)
+                            
+                        with open(summary_csv, mode="w", newline="", encoding="utf-8") as sf:
+                            writer = csv.DictWriter(sf, fieldnames=fields)
+                            writer.writeheader()
+                            for row in summary_records:
+                                if "edited" not in row:
+                                    row["edited"] = "False"
+                                writer.writerow(row)
+                                
+                    # 6. Update run_manifest.json on disk
+                    manifest_json = Path(active_batch_dir) / "run_manifest.json"
+                    if manifest_json.exists():
+                        with open(manifest_json, mode="r", encoding="utf-8") as mf:
+                            mdata = json.load(mf)
+                        if "images" in mdata:
+                            for img_rec in mdata["images"]:
+                                if img_rec.get("image_name", "").lower() == filename.lower():
+                                    img_rec["cell_count"] = results["cell_count"]
+                                    img_rec["mean_area_px"] = results["mean_cell_area_px"]
+                                    img_rec["median_area_px"] = results["median_cell_area_px"]
+                                    img_rec["average_diameter_px"] = results["average_diameter_px"]
+                                    img_rec["cell_density"] = results["cell_density"]
+                                    img_rec["status"] = "SUCCESS"
+                                    img_rec["edited"] = True
+                        with open(manifest_json, mode="w", encoding="utf-8") as mf:
+                            json.dump(mdata, mf, indent=2)
+                            
+                    # 7. Invalidate batch explorer cache to force UI refresh
+                    p = self.parent()
+                    main_win = None
+                    while p:
+                        if hasattr(p, "batch_explorer_page"):
+                            main_win = p
+                            break
+                        p = p.parent()
+                        
+                    if main_win:
+                        main_win.batch_explorer_page._loaded_batch_dir = None
+                        
+                except Exception as ex:
+                    logger.error("AnalysisPage: Failed to synchronize batch records on Save: %s", ex, exc_info=True)
+                    return False
+                    
+        state.is_dirty = False
+        return True
+
+    @Slot()
+    def _on_save_clicked(self):
+        success = self.save_analysis()
+        if success:
+            from PySide6.QtWidgets import QMessageBox
+            if state.current_origin_type == "batch":
+                QMessageBox.information(self, "Save Complete", "Manual mask corrections committed to Batch Results successfully!")
+            else:
+                QMessageBox.information(self, "Save Complete", "Analysis state saved successfully!")
+
+    @Slot(bool)
+    def _on_dirty_state_changed(self, is_dirty: bool):
+        self.save_analysis_btn.setEnabled(is_dirty)
+        if is_dirty:
+            self.dirty_lbl.setText("⚠️ Unsaved Changes")
+            self.dirty_lbl.setVisible(True)
+        else:
+            self.dirty_lbl.setVisible(False)
 
     @Slot(str)
     def _on_analysis_failed(self, error_msg: str):
@@ -1495,6 +1575,24 @@ class AnalysisPage(QWidget):
             self.type_val.setStyleSheet("color: #4F46E5; font-size: 12px; font-weight: 600;")
             
             self.edit_btn.setStyleSheet("""
+                QPushButton {
+                    padding: 8px;
+                    background-color: #FFFFFF;
+                    border: 1px solid #D1D5DB;
+                    color: #4B5563;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 11px;
+                }
+                QPushButton:hover { background-color: #F3F4F6; }
+                QPushButton:disabled {
+                    background-color: #F9FAFB;
+                    border: 1px solid #E5E7EB;
+                    color: #9CA3AF;
+                }
+            """)
+            
+            self.save_analysis_btn.setStyleSheet("""
                 QPushButton {
                     padding: 8px;
                     background-color: #FFFFFF;
@@ -1593,6 +1691,24 @@ class AnalysisPage(QWidget):
             self.type_val.setStyleSheet("color: #6366F1; font-size: 12px; font-weight: 600;")
             
             self.edit_btn.setStyleSheet("""
+                QPushButton {
+                    padding: 8px;
+                    background-color: #24242B;
+                    border: 1px solid #2B2B35;
+                    color: #D1D5DB;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 11px;
+                }
+                QPushButton:hover { background-color: #2D2D37; color: #FFFFFF; }
+                QPushButton:disabled {
+                    background-color: #16161A;
+                    border: 1px solid #222227;
+                    color: #4B5563;
+                }
+            """)
+            
+            self.save_analysis_btn.setStyleSheet("""
                 QPushButton {
                     padding: 8px;
                     background-color: #24242B;

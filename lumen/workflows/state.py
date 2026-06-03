@@ -4,8 +4,11 @@ from lumen.core.logger import logger
 
 class AnalysisSession:
     """Stores persistent state for a specific microscopy analysis session."""
-    def __init__(self, image_path: str):
+    def __init__(self, image_path: str, origin_type: str = "single", batch_origin_context: Optional[str] = None):
         self.image_path = image_path
+        self.origin_type = origin_type
+        self.batch_origin_context = batch_origin_context
+        self.dirty = False
         self.analysis_results = None
         self.quality_mode = "Balanced"
         self.mask_opacity = 40
@@ -39,25 +42,33 @@ class WorkspaceManager(QObject):
         self._active_analysis_path = None
         self._active_batch_dir = None
 
+    def _normalize_path(self, path: Optional[str]) -> Optional[str]:
+        if not path:
+            return None
+        return path.replace('\\', '/')
+
     def get_analysis_session(self, image_path: str) -> Optional[AnalysisSession]:
         """Gets the analysis session for the given image path."""
-        return self._analysis_sessions.get(image_path)
+        norm_path = self._normalize_path(image_path)
+        return self._analysis_sessions.get(norm_path)
 
-    def start_analysis_session(self, image_path: str) -> AnalysisSession:
+    def start_analysis_session(self, image_path: str, origin_type: str = "single", batch_origin_context: Optional[str] = None) -> AnalysisSession:
         """Gets or starts a session for the given image path."""
-        if image_path not in self._analysis_sessions:
-            self._analysis_sessions[image_path] = AnalysisSession(image_path)
-            logger.info("WorkspaceManager: Started fresh AnalysisSession for %s", image_path)
-        self._active_analysis_path = image_path
-        return self._analysis_sessions[image_path]
+        norm_path = self._normalize_path(image_path)
+        if norm_path not in self._analysis_sessions:
+            self._analysis_sessions[norm_path] = AnalysisSession(image_path, origin_type, batch_origin_context)
+            logger.info("WorkspaceManager: Started fresh AnalysisSession for %s with origin %s", norm_path, origin_type)
+        self._active_analysis_path = norm_path
+        return self._analysis_sessions[norm_path]
 
     def reset_analysis_session(self, image_path: str = None):
         """Clears the specified analysis session, or all if none provided."""
         if image_path:
-            self._analysis_sessions.pop(image_path, None)
-            if self._active_analysis_path == image_path:
+            norm_path = self._normalize_path(image_path)
+            self._analysis_sessions.pop(norm_path, None)
+            if self._active_analysis_path == norm_path:
                 self._active_analysis_path = None
-            logger.info("WorkspaceManager: Cleared AnalysisSession for %s", image_path)
+            logger.info("WorkspaceManager: Cleared AnalysisSession for %s", norm_path)
         else:
             self._analysis_sessions.clear()
             self._active_analysis_path = None
@@ -65,23 +76,26 @@ class WorkspaceManager(QObject):
 
     def get_batch_session(self, batch_results_dir: str) -> Optional[BatchResultSession]:
         """Gets the batch session for the given batch directory."""
-        return self._batch_sessions.get(batch_results_dir)
+        norm_path = self._normalize_path(batch_results_dir)
+        return self._batch_sessions.get(norm_path)
 
     def start_batch_session(self, batch_results_dir: str) -> BatchResultSession:
         """Gets or starts a session for the given batch directory."""
-        if batch_results_dir not in self._batch_sessions:
-            self._batch_sessions[batch_results_dir] = BatchResultSession(batch_results_dir)
-            logger.info("WorkspaceManager: Started fresh BatchResultSession for %s", batch_results_dir)
-        self._active_batch_dir = batch_results_dir
-        return self._batch_sessions[batch_results_dir]
+        norm_path = self._normalize_path(batch_results_dir)
+        if norm_path not in self._batch_sessions:
+            self._batch_sessions[norm_path] = BatchResultSession(batch_results_dir)
+            logger.info("WorkspaceManager: Started fresh BatchResultSession for %s", norm_path)
+        self._active_batch_dir = norm_path
+        return self._batch_sessions[norm_path]
 
     def reset_batch_session(self, batch_results_dir: str = None):
         """Clears the specified batch session, or all if none provided."""
         if batch_results_dir:
-            self._batch_sessions.pop(batch_results_dir, None)
-            if self._active_batch_dir == batch_results_dir:
+            norm_path = self._normalize_path(batch_results_dir)
+            self._batch_sessions.pop(norm_path, None)
+            if self._active_batch_dir == norm_path:
                 self._active_batch_dir = None
-            logger.info("WorkspaceManager: Cleared BatchResultSession for %s", batch_results_dir)
+            logger.info("WorkspaceManager: Cleared BatchResultSession for %s", norm_path)
         else:
             self._batch_sessions.clear()
             self._active_batch_dir = None
@@ -118,6 +132,7 @@ class AppState(QObject):
 
     # Segmentation Method Signals
     segmentation_method_changed = Signal(str)
+    dirty_state_changed = Signal(bool)
 
     def __init__(self):
         super().__init__()
@@ -162,6 +177,41 @@ class AppState(QObject):
             self._current_image_path = path
             logger.info("AppState: image path updated: %s", path)
             self.image_loaded.emit(path or "")
+
+    @property
+    def is_dirty(self) -> bool:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path)
+            if session:
+                return getattr(session, "dirty", False)
+        return False
+
+    @is_dirty.setter
+    def is_dirty(self, val: bool):
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path)
+            if session:
+                old_val = getattr(session, "dirty", False)
+                if old_val != val:
+                    session.dirty = val
+                    logger.info("AppState: dirty state updated to: %s", val)
+                    self.dirty_state_changed.emit(val)
+
+    @property
+    def current_origin_type(self) -> str:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path)
+            if session:
+                return getattr(session, "origin_type", "single")
+        return "single"
+
+    @property
+    def current_batch_origin_context(self) -> Optional[str]:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path)
+            if session:
+                return getattr(session, "batch_origin_context", None)
+        return None
 
     @property
     def current_workflow(self) -> str:

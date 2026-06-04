@@ -310,6 +310,7 @@ class TestLumenBatchPipeline(unittest.TestCase):
         
         # Ensure batch manager lifecycle state is RUNNING during progress tracking simulation
         batch_manager.lifecycle_state = "RUNNING"
+        batch_manager.image_paths = ["mock"] * 10
         
         # Manually trigger batch started on page
         page._on_batch_started(10)
@@ -356,6 +357,9 @@ class TestLumenBatchPipeline(unittest.TestCase):
         self.assertEqual(page.skipped_val.text(), "2")
         
         # Test case 5: Final completion KPI forced refresh
+        batch_manager.lifecycle_state = "COMPLETED"
+        batch_manager.completed_count = 9
+        batch_manager.failed_count = 1
         batch_manager.skipped_count = 3
         # completed=9 (6 successful + 3 skipped), failed=1
         page._on_batch_finished(9, 1, "/mock/results")
@@ -374,6 +378,8 @@ class TestLumenBatchPipeline(unittest.TestCase):
         page.results_dir = "/some/old/path"
         
         # Trigger next batch started
+        batch_manager.lifecycle_state = "RUNNING"
+        batch_manager.image_paths = ["mock"] * 15
         page._on_batch_started(15)
         self.assertEqual(page.cancel_btn.text(), "Cancel Batch")
         self.assertTrue(page.cancel_btn.isEnabled())
@@ -394,6 +400,7 @@ class TestLumenBatchPipeline(unittest.TestCase):
         
         # Test case 8: Centralized backend resolution in batch_manager (Refinement 2)
         batch_manager.lifecycle_state = "IDLE"
+        batch_manager.image_paths = []
         batch_manager.parameters["backend_preference"] = "CPU"
         batch_manager.start_batch()
         self.assertEqual(batch_manager.resolved_backend, "CPU")
@@ -635,6 +642,249 @@ class TestLumenBatchPipeline(unittest.TestCase):
         # Emit batch_finished signal via batch_manager
         batch_manager.batch_finished.emit(5, 0, mock_results_dir)
         self.assertIsNone(explorer._loaded_batch_dir, "Cache should be invalidated when batch finishes")
+
+    def test_batch_progress_rehydration_on_show(self):
+        """Verifies that BatchProgressPage immediately rehydrates its UI from canonical batch_manager state when shown."""
+        from lumen.pages.batch_progress_page import BatchProgressPage
+        page = BatchProgressPage()
+        page.show()
+        
+        # 1. RUNNING State Rehydration
+        batch_manager.lifecycle_state = "RUNNING"
+        batch_manager.completed_count = 4
+        batch_manager.failed_count = 1
+        batch_manager.skipped_count = 2
+        batch_manager.image_paths = ["img1.png", "img2.png", "img3.png", "img4.png", "img5.png", "img6.png", "img7.png", "img8.png", "img9.png", "img10.png"]
+        batch_manager.current_idx = 5
+        batch_manager.resolved_backend = "GPU (CUDA)"
+        
+        page.sync_ui_state()
+        
+        self.assertEqual(page.completed_val.text(), "2") # completed_count - skipped_count = 4 - 2 = 2
+        self.assertEqual(page.failed_val.text(), "1")
+        self.assertEqual(page.skipped_val.text(), "2")
+        self.assertEqual(page.total_val.text(), "10")
+        self.assertEqual(page.progress_bar.value(), 5) # completed + failed = 5
+        self.assertEqual(page.progress_bar.maximum(), 10)
+        self.assertIn("Processing image 6 of 10", page.status_lbl.text())
+        self.assertEqual(page.backend_val.text(), "GPU (CUDA)")
+        
+        # 2. PAUSED State Rehydration
+        batch_manager.lifecycle_state = "PAUSED"
+        page.sync_ui_state()
+        self.assertEqual(page.completed_val.text(), "2")
+        self.assertEqual(page.failed_val.text(), "1")
+        self.assertEqual(page.progress_bar.value(), 5)
+        self.assertIn("Paused: 5 of 10 images processed", page.status_lbl.text())
+        
+        # 3. COMPLETED State Rehydration
+        batch_manager.lifecycle_state = "COMPLETED"
+        batch_manager.output_dir = "/some/output/dir"
+        page.sync_ui_state()
+        self.assertEqual(page.completed_val.text(), "7") # 10 total - 1 failed - 2 skipped = 7
+        self.assertEqual(page.failed_val.text(), "1")
+        self.assertEqual(page.skipped_val.text(), "2")
+        self.assertEqual(page.progress_bar.value(), 10)
+        self.assertEqual(page.status_lbl.text(), "Batch execution complete!")
+        self.assertTrue(page.completion_card.isVisible())
+
+    def test_batch_explorer_modified_record_disk_restore(self):
+        """Verifies that when BatchExplorer restores a session, modified records are resolved from canonical outputs on disk."""
+        from lumen.pages.batch_explorer_page import BatchResultsExplorerPage
+        explorer = BatchResultsExplorerPage()
+        
+        # Mock directory structure for batch results
+        mock_results_dir = self.test_batch_dir / "explorer_disk_restore"
+        os.makedirs(mock_results_dir, exist_ok=True)
+        
+        # Start a batch result session in memory
+        session = state.workspace_manager.start_batch_session(str(mock_results_dir))
+        
+        # Populate session with unedited metrics
+        session.records = [
+            {
+                "image_name": "image_01.png",
+                "cell_count": "10",
+                "mean_area_px": "150.00",
+                "median_area_px": "140.00",
+                "average_diameter_px": "12.00",
+                "cell_density": "1.00e-04",
+                "status": "SUCCESS",
+                "edited": False
+            }
+        ]
+        session.manifest_data = {
+            "workflow": "cell_counting",
+            "backend": "CPU",
+            "segmentation_mode": "Balanced",
+            "images": [
+                {
+                    "image_name": "image_01.png",
+                    "cell_count": 10,
+                    "mean_area_px": 150.0,
+                    "median_area_px": 140.0,
+                    "average_diameter_px": 12.0,
+                    "cell_density": 0.0001,
+                    "status": "SUCCESS",
+                    "edited": False
+                }
+            ]
+        }
+        
+        # Write modified outputs to disk (simulating "Save to Batch" write)
+        summary_csv = mock_results_dir / "batch_summary.csv"
+        manifest_json = mock_results_dir / "run_manifest.json"
+        
+        with open(summary_csv, mode="w", newline="", encoding="utf-8") as sf:
+            import csv
+            writer = csv.DictWriter(sf, fieldnames=[
+                "image_name", "workflow", "segmentation_mode", "model_type",
+                "cell_count", "mean_area_px", "median_area_px", "average_diameter_px",
+                "cell_density", "processing_time_s", "used_gpu", "requested_backend", "resolved_backend", "status",
+                "edited"
+            ])
+            writer.writeheader()
+            writer.writerow({
+                "image_name": "image_01.png",
+                "workflow": "cell_counting",
+                "segmentation_mode": "Balanced",
+                "model_type": "cyto",
+                "cell_count": "99", # modified cell count!
+                "mean_area_px": "180.50",
+                "median_area_px": "175.00",
+                "average_diameter_px": "15.20",
+                "cell_density": "9.90e-04",
+                "processing_time_s": "4.5",
+                "used_gpu": "CPU",
+                "requested_backend": "CPU",
+                "resolved_backend": "CPU",
+                "status": "SUCCESS",
+                "edited": "True" # marked as edited on disk!
+            })
+            
+        with open(manifest_json, mode="w", encoding="utf-8") as mf:
+            import json
+            json.dump({
+                "workflow": "cell_counting",
+                "backend": "CPU",
+                "segmentation_mode": "Balanced",
+                "images": [
+                    {
+                        "image_name": "image_01.png",
+                        "cell_count": 99,
+                        "mean_area_px": 180.5,
+                        "median_area_px": 175.0,
+                        "average_diameter_px": 15.2,
+                        "cell_density": 0.00099,
+                        "status": "SUCCESS",
+                        "edited": True
+                    }
+                ]
+            }, mf, indent=2)
+            
+        # Restore session on the explorer page
+        explorer._restore_from_session(session)
+        
+        # Verify that restored record was refreshed from disk because edited = True
+        self.assertEqual(len(explorer.records), 1)
+        record = explorer.records[0]
+        self.assertTrue(record["edited"])
+        self.assertEqual(record["cell_count"], "99")
+        self.assertEqual(record["mean_area_px"], "180.50")
+        
+        # Verify manifest was also refreshed
+        manifest_img = explorer.manifest_data["images"][0]
+        self.assertTrue(manifest_img["edited"])
+        self.assertEqual(manifest_img["cell_count"], 99)
+
+    def test_batch_explorer_search_reentrancy_protection(self):
+        """Verifies re-entrancy protection, signal blocking, and null-safe selection cleanup during list rebuilding."""
+        from lumen.pages.batch_explorer_page import BatchResultsExplorerPage
+        explorer = BatchResultsExplorerPage()
+        
+        # Setup mock records
+        explorer.records = [
+            {"image_name": "alpha.png", "status": "SUCCESS"},
+            {"image_name": "beta.png", "status": "SUCCESS"}
+        ]
+        
+        # Populate list initial
+        explorer._populate_list(select_default=True)
+        self.assertEqual(explorer.navigator_list.count(), 2)
+        
+        # Verify first item got default selection
+        self.assertEqual(explorer.navigator_list.currentRow(), 0)
+        
+        # Verify guards during rebuild
+        explorer._is_populating_list = True
+        # Under guard: search and selections should early return and do nothing
+        explorer._on_search_changed()
+        self.assertEqual(explorer.navigator_list.count(), 2) # wasn't cleared/repopulated
+        
+        # Reset guard
+        explorer._is_populating_list = False
+        
+        # Set search query to filter out everything
+        explorer.search_bar.setText("gamma")
+        
+        # Populate list and verify null-safe cleanup
+        explorer._populate_list(select_default=True)
+        self.assertEqual(explorer.navigator_list.count(), 0)
+        self.assertIsNone(explorer.navigator_list.currentItem())
+        
+        # Check that metadata and viewer were safely cleared
+        self.assertEqual(explorer.open_analysis_btn.isEnabled(), False)
+
+    def test_batch_manager_worker_lifecycle_guards(self):
+        """Verifies worker lifecycle validation guards and callback-based destruction transitions in BatchProcessingManager."""
+        from PySide6.QtCore import QCoreApplication
+        from lumen.processing.batch_manager import batch_manager
+        from lumen.processing.processing_manager import AnalysisWorker
+        
+        # Reset batch manager to clean state
+        batch_manager.reset_batch()
+        
+        # Setup mock image paths so analyze_next_image has work
+        batch_manager.image_paths = ["image1.png", "image2.png"]
+        batch_manager.current_idx = 0
+        
+        # Create a mock worker
+        mock_worker = AnalysisWorker("image1.png", {})
+        batch_manager.active_worker = mock_worker
+        
+        # Verify lifecycle violation checks: analyze_next_image should fail to start because active_worker is not None
+        batch_manager.analyze_next_image()
+        self.assertIsNone(batch_manager._destroying_worker_ref)
+        self.assertEqual(batch_manager.active_worker, mock_worker)
+        
+        # Trigger cleanup with a callback
+        callback_called = False
+        def test_callback():
+            nonlocal callback_called
+            callback_called = True
+            
+        batch_manager._cleanup_active_worker(test_callback)
+        
+        # Verification after cleanup call but before event loop processes:
+        self.assertIsNone(batch_manager.active_worker)
+        self.assertEqual(batch_manager._destroying_worker_ref(), mock_worker)
+        self.assertFalse(callback_called)
+        
+        # Clear local strong reference to mock_worker and force garbage collection
+        del mock_worker
+        import gc
+        gc.collect()
+        
+        # Process deferred deletion events using QEventLoop
+        from PySide6.QtCore import QEventLoop, QTimer
+        loop = QEventLoop()
+        QTimer.singleShot(0, loop.quit)
+        loop.exec()
+        
+        # Verify that destroyed callback was triggered and fields cleared
+        self.assertTrue(callback_called)
+        self.assertIsNone(batch_manager._destroying_worker_ref)
+        self.assertIsNone(batch_manager._on_cleanup_finished_callback)
 
 
 if __name__ == "__main__":

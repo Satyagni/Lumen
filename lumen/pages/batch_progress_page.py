@@ -532,6 +532,27 @@ class BatchProgressPage(QWidget):
             self.total_images = len(batch_manager.image_paths)
             self.backend_val.setText(batch_manager.resolved_backend)
             
+            completed = batch_manager.completed_count
+            failed = batch_manager.failed_count
+            skipped = batch_manager.skipped_count
+            processed = completed + failed
+            
+            success_completed = max(0, completed - skipped)
+            self.completed_val.setText(str(success_completed))
+            self.failed_val.setText(str(failed))
+            self.skipped_val.setText(str(skipped))
+            
+            self.progress_bar.setValue(processed)
+            
+            if processed < len(batch_manager.image_paths):
+                current_image_name = Path(batch_manager.image_paths[batch_manager.current_idx]).name if batch_manager.current_idx < len(batch_manager.image_paths) else ""
+                if current_image_name:
+                    self.status_lbl.setText(f"Processing image {processed + 1} of {self.total_images}: {current_image_name}")
+                else:
+                    self.status_lbl.setText(f"Processing: {processed} of {self.total_images} images processed")
+            else:
+                self.status_lbl.setText(f"Processing complete: {processed} of {self.total_images} images processed")
+            
             if not self.ui_timer.isActive():
                 self.ui_timer.start(1000)
         elif state_name == "PAUSED":
@@ -552,6 +573,19 @@ class BatchProgressPage(QWidget):
             self.total_images = len(batch_manager.image_paths)
             self.backend_val.setText(batch_manager.resolved_backend)
             
+            completed = batch_manager.completed_count
+            failed = batch_manager.failed_count
+            skipped = batch_manager.skipped_count
+            processed = completed + failed
+            
+            success_completed = max(0, completed - skipped)
+            self.completed_val.setText(str(success_completed))
+            self.failed_val.setText(str(failed))
+            self.skipped_val.setText(str(skipped))
+            
+            self.progress_bar.setValue(processed)
+            self.status_lbl.setText(f"Paused: {processed} of {self.total_images} images processed")
+            
             self.ui_timer.stop()
         elif state_name == "COMPLETED":
             self.results_dir = batch_manager.output_dir or state.batch_results_dir
@@ -566,6 +600,16 @@ class BatchProgressPage(QWidget):
             skipped = batch_manager.skipped_count
             failed = batch_manager.failed_count
             success_completed = max(0, len(batch_manager.image_paths) - failed - skipped)
+            
+            self.completed_val.setText(str(success_completed))
+            self.failed_val.setText(str(failed))
+            self.skipped_val.setText(str(skipped))
+            self.total_val.setText(str(len(batch_manager.image_paths)))
+            self.progress_bar.setMaximum(len(batch_manager.image_paths))
+            self.progress_bar.setValue(len(batch_manager.image_paths))
+            self.status_lbl.setText("Batch execution complete!")
+            self.backend_val.setText(batch_manager.resolved_backend)
+            self.total_images = len(batch_manager.image_paths)
             
             self.comp_desc.setText(
                 f"Lumen successfully finished folder analysis run.\n\n"
@@ -583,6 +627,13 @@ class BatchProgressPage(QWidget):
             self.cancel_btn.setVisible(False)
             self.pause_btn.setVisible(False)
             self.ui_timer.stop()
+            
+            # Clear or reset fields in idle/reviewed state to ensure no leak of stale values
+            self.completed_val.setText("0")
+            self.failed_val.setText("0")
+            self.skipped_val.setText("0")
+            self.progress_bar.setValue(0)
+            self.status_lbl.setText("")
 
         self._update_remaining_time()
 

@@ -138,6 +138,7 @@ class BatchResultsExplorerPage(QWidget):
         self.batch_dir = None
         self.records = []
         self.manifest_data = {}
+        self._is_populating_list = False
 
         # Debounce timer for search queries
         from PySide6.QtCore import QTimer
@@ -435,9 +436,18 @@ class BatchResultsExplorerPage(QWidget):
         self._loaded_batch_dir = None
         results_dir = None
         for arg in args:
-            if isinstance(arg, str) and os.path.isdir(arg):
-                results_dir = arg
-                break
+            if isinstance(arg, str):
+                if os.path.isdir(arg):
+                    results_dir = arg
+                    break
+                elif os.path.isfile(arg):
+                    anal_sess = state.workspace_manager.get_analysis_session(arg)
+                    if anal_sess and anal_sess.batch_origin_context:
+                        results_dir = anal_sess.batch_origin_context
+                        break
+        if not results_dir:
+            if state.is_batch_active:
+                results_dir = batch_manager.output_dir
         if not results_dir:
             results_dir = state.batch_results_dir
         if results_dir:
@@ -594,6 +604,8 @@ class BatchResultsExplorerPage(QWidget):
         self._loaded_batch_dir = results_dir
 
     def _save_to_session(self):
+        if getattr(self, "_is_populating_list", False):
+            return
         results_dir = state.batch_results_dir
         if not results_dir:
             return
@@ -630,6 +642,68 @@ class BatchResultsExplorerPage(QWidget):
     def _restore_from_session(self, session):
         self.records = session.records
         self.manifest_data = session.manifest_data
+        if session.batch_results_dir:
+            self.batch_dir = Path(session.batch_results_dir)
+        
+        # Refresh modified records from disk to ensure we load the latest committed metrics
+        if session.batch_results_dir and os.path.exists(session.batch_results_dir):
+            summary_csv = Path(session.batch_results_dir) / "batch_summary.csv"
+            manifest_json = Path(session.batch_results_dir) / "run_manifest.json"
+            
+            disk_records = {}
+            if summary_csv.exists():
+                try:
+                    import csv
+                    with open(summary_csv, mode="r", newline="", encoding="utf-8") as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
+                            if row.get("image_name"):
+                                disk_records[row["image_name"]] = row
+                except Exception as e:
+                    logger.error("BatchExplorer: Failed to load fresh CSV summary during restore: %s", e)
+                    
+            disk_manifest_images = {}
+            if manifest_json.exists():
+                try:
+                    import json
+                    with open(manifest_json, mode="r", encoding="utf-8") as f:
+                        disk_mdata = json.load(f)
+                    if "images" in disk_mdata:
+                        for img in disk_mdata["images"]:
+                            if img.get("image_name"):
+                                disk_manifest_images[img["image_name"]] = img
+                except Exception as e:
+                    logger.error("BatchExplorer: Failed to load fresh manifest during restore: %s", e)
+
+            # Update in-memory session records with latest disk metrics for edited items
+            if self.records:
+                for rec in self.records:
+                    image_name = rec.get("image_name")
+                    is_edited_on_disk = False
+                    if image_name in disk_records:
+                        is_edited_on_disk = disk_records[image_name].get("edited") in [True, "True", "true", 1, "1"]
+                    is_edited_in_session = rec.get("edited") in [True, "True", "true", 1, "1"]
+                    
+                    if is_edited_on_disk or is_edited_in_session:
+                        rec["edited"] = True
+                        if image_name in disk_records:
+                            rec.update(disk_records[image_name])
+                            rec["edited"] = True
+
+            # Update manifest_data with latest disk metrics for edited items
+            if self.manifest_data and "images" in self.manifest_data:
+                for img in self.manifest_data["images"]:
+                    image_name = img.get("image_name")
+                    is_edited_on_disk = False
+                    if image_name in disk_manifest_images:
+                        is_edited_on_disk = disk_manifest_images[image_name].get("edited") in [True, "True", "true", 1, "1"]
+                    is_edited_in_session = img.get("edited") in [True, "True", "true", 1, "1"]
+                    
+                    if is_edited_on_disk or is_edited_in_session:
+                        img["edited"] = True
+                        if image_name in disk_manifest_images:
+                            img.update(disk_manifest_images[image_name])
+                            img["edited"] = True
         
         # Block signals to prevent premature triggers
         self.navigator_list.blockSignals(True)
@@ -679,25 +753,39 @@ class BatchResultsExplorerPage(QWidget):
                 self.navigator_list.setCurrentRow(0)
 
     def _on_search_text_changed(self, text: str):
+        if getattr(self, "_is_populating_list", False):
+            return
         self.search_timer.start()
 
     def _on_search_changed(self):
+        if getattr(self, "_is_populating_list", False):
+            return
         self._populate_list()
         self._save_to_session()
 
     def _on_sort_changed(self, text: str):
+        if getattr(self, "_is_populating_list", False):
+            return
         self._populate_list()
         self._save_to_session()
 
     def _on_show_original_changed(self, checked: bool):
+        if getattr(self, "_is_populating_list", False):
+            return
         self.image_viewer.set_show_original(checked)
         self._save_to_session()
 
     def _on_show_overlay_changed(self, checked: bool):
+        if getattr(self, "_is_populating_list", False):
+            return
         self.image_viewer.set_show_overlay(checked)
         self._save_to_session()
 
     def _populate_list(self, select_default=True):
+        if getattr(self, "_is_populating_list", False):
+            return
+        self._is_populating_list = True
+        
         # 1. Save current selection before clearing
         selected_name = None
         curr_item = self.navigator_list.currentItem()
@@ -705,82 +793,89 @@ class BatchResultsExplorerPage(QWidget):
             rec = curr_item.data(Qt.UserRole)
             selected_name = rec.get("image_name") if rec else None
 
-        # Block signals to prevent intermediate currentItemChanged triggers during clearing and item insertion
-        self.navigator_list.blockSignals(True)
-        self.navigator_list.clear()
-        self.image_viewer.clear()
-        self.image_viewer.set_analysis_results(None)
-        self._clear_metadata_panel()
-        self.open_analysis_btn.setEnabled(False)
+        from PySide6.QtCore import QSignalBlocker
+        blocker = QSignalBlocker(self.navigator_list)
+        sel_model = self.navigator_list.selectionModel()
+        sel_blocker = QSignalBlocker(sel_model) if sel_model else None
 
-        search_text = self.search_bar.text().lower()
-        sort_by = self.sort_combo.currentText()
-
-        # Sort copy of records list
-        sorted_records = list(self.records)
-        if sort_by == "Alphabetical":
-            sorted_records.sort(key=lambda x: x.get("image_name", "").lower())
-        elif sort_by == "Cell Count":
-            sorted_records.sort(key=lambda x: int(x.get("cell_count") or 0), reverse=True)
-        elif sort_by == "Processing Time":
-            sorted_records.sort(key=lambda x: float(x.get("processing_time_s") or 0.0), reverse=True)
-        elif sort_by == "Status":
-            sorted_records.sort(key=lambda x: x.get("status", ""))
-
-        theme = theme_service.current_theme
-        
         target_item = None
-        for rec in sorted_records:
-            if not rec:
-                continue
-            filename = rec.get("image_name", "")
-            if not filename:
-                continue
-            if search_text and search_text not in filename.lower():
-                continue
 
-            item = QListWidgetItem()
-            item.setData(Qt.UserRole, rec)
+        try:
+            self.navigator_list.clear()
+            self.image_viewer.clear()
+            self.image_viewer.set_analysis_results(None)
+            self._clear_metadata_panel()
+            self.open_analysis_btn.setEnabled(False)
 
-            # Custom list item row widget
-            row_widget = QWidget()
-            row_layout = QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(8, 6, 8, 6)
-            row_layout.setSpacing(8)
+            search_text = self.search_bar.text().lower()
+            sort_by = self.sort_combo.currentText()
 
-            is_edited = rec.get("edited") in [True, "True", "true", 1, "1"]
-            display_name = f"{filename} ✏ Modified" if is_edited else filename
-            name_lbl = QLabel(display_name)
-            if theme == "light":
-                name_lbl.setStyleSheet("font-size: 11px; font-weight: bold; color: #111827;")
-            else:
-                name_lbl.setStyleSheet("font-size: 11px; font-weight: bold; color: #FFFFFF;")
+            # Sort copy of records list
+            sorted_records = list(self.records)
+            if sort_by == "Alphabetical":
+                sorted_records.sort(key=lambda x: x.get("image_name", "").lower())
+            elif sort_by == "Cell Count":
+                sorted_records.sort(key=lambda x: int(x.get("cell_count") or 0), reverse=True)
+            elif sort_by == "Processing Time":
+                sorted_records.sort(key=lambda x: float(x.get("processing_time_s") or 0.0), reverse=True)
+            elif sort_by == "Status":
+                sorted_records.sort(key=lambda x: x.get("status", ""))
 
-            status = rec.get("status", "SUCCESS")
-            status_lbl = QLabel()
-            if "SUCCESS" in status:
-                status_lbl.setText("✅ SUCCESS")
-                status_lbl.setStyleSheet("font-size: 9px; color: #34D399; background: #065F46; padding: 2px 6px; border-radius: 4px; font-weight: bold;")
-            elif "SKIP" in status:
-                status_lbl.setText("⏭ SKIPPED")
-                status_lbl.setStyleSheet("font-size: 9px; color: #F59E0B; background: #78350F; padding: 2px 6px; border-radius: 4px; font-weight: bold;")
-            else:
-                status_lbl.setText("⚠ FAILED")
-                status_lbl.setStyleSheet("font-size: 9px; color: #F87171; background: #991B1B; padding: 2px 6px; border-radius: 4px; font-weight: bold;")
-
-            row_layout.addWidget(name_lbl)
-            row_layout.addStretch(1)
-            row_layout.addWidget(status_lbl)
-
-            self.navigator_list.addItem(item)
-            self.navigator_list.setItemWidget(item, row_widget)
+            theme = theme_service.current_theme
             
-            # Check if this is the item to restore selection to
-            if selected_name and filename == selected_name:
-                target_item = item
+            for rec in sorted_records:
+                if not rec:
+                    continue
+                filename = rec.get("image_name", "")
+                if not filename:
+                    continue
+                if search_text and search_text not in filename.lower():
+                    continue
 
-        # Unblock signals
-        self.navigator_list.blockSignals(False)
+                item = QListWidgetItem()
+                item.setData(Qt.UserRole, rec)
+
+                # Custom list item row widget
+                row_widget = QWidget()
+                row_layout = QHBoxLayout(row_widget)
+                row_layout.setContentsMargins(8, 6, 8, 6)
+                row_layout.setSpacing(8)
+
+                is_edited = rec.get("edited") in [True, "True", "true", 1, "1"]
+                display_name = f"{filename} ✏ Modified" if is_edited else filename
+                name_lbl = QLabel(display_name)
+                if theme == "light":
+                    name_lbl.setStyleSheet("font-size: 11px; font-weight: bold; color: #111827;")
+                else:
+                    name_lbl.setStyleSheet("font-size: 11px; font-weight: bold; color: #FFFFFF;")
+
+                status = rec.get("status", "SUCCESS")
+                status_lbl = QLabel()
+                if "SUCCESS" in status:
+                    status_lbl.setText("✅ SUCCESS")
+                    status_lbl.setStyleSheet("font-size: 9px; color: #34D399; background: #065F46; padding: 2px 6px; border-radius: 4px; font-weight: bold;")
+                elif "SKIP" in status:
+                    status_lbl.setText("⏭ SKIPPED")
+                    status_lbl.setStyleSheet("font-size: 9px; color: #F59E0B; background: #78350F; padding: 2px 6px; border-radius: 4px; font-weight: bold;")
+                else:
+                    status_lbl.setText("⚠ FAILED")
+                    status_lbl.setStyleSheet("font-size: 9px; color: #F87171; background: #991B1B; padding: 2px 6px; border-radius: 4px; font-weight: bold;")
+
+                row_layout.addWidget(name_lbl)
+                row_layout.addStretch(1)
+                row_layout.addWidget(status_lbl)
+
+                self.navigator_list.addItem(item)
+                self.navigator_list.setItemWidget(item, row_widget)
+                
+                # Check if this is the item to restore selection to
+                if selected_name and filename == selected_name:
+                    target_item = item
+        finally:
+            if sel_blocker:
+                sel_blocker.unblock()
+            blocker.unblock()
+            self._is_populating_list = False
 
         # 2. Restore selection or select default
         if select_default:
@@ -793,6 +888,8 @@ class BatchResultsExplorerPage(QWidget):
                 self._on_selection_changed(None, None)
 
     def _on_selection_changed(self, current_item: QListWidgetItem, previous_item: QListWidgetItem):
+        if getattr(self, "_is_populating_list", False):
+            return
         if not current_item:
             self._clear_metadata_panel()
             self.image_viewer.clear()
@@ -812,6 +909,8 @@ class BatchResultsExplorerPage(QWidget):
         self._save_to_session()
 
     def _load_record_details(self, record: dict):
+        if getattr(self, "_is_populating_list", False):
+            return
         self._clear_metadata_panel()
         self.image_viewer.clear()
         self.image_viewer.set_analysis_results(None)
@@ -828,6 +927,10 @@ class BatchResultsExplorerPage(QWidget):
 
         if is_failed:
             logger.warning("BatchExplorer: Selected record is in FAILED state.")
+            return
+
+        if not self.batch_dir:
+            logger.warning("BatchExplorer: batch_dir is None, skipping record details loading.")
             return
 
         # 2. Asynchronously / Lazily load images and overlays

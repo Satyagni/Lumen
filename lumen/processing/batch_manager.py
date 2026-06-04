@@ -40,6 +40,8 @@ class BatchProcessingManager(QObject):
         self.failed_count = 0
         self.skipped_count = 0
         self.active_worker = None
+        self._destroying_worker_ref = None
+        self._on_cleanup_finished_callback = None
         self._is_cancelled = False
         self._is_paused_requested = False
         
@@ -183,7 +185,6 @@ class BatchProcessingManager(QObject):
         state.is_batch_active = True
         state.batch_progress = 0
         state.batch_status = f"Starting analysis: 0/{len(self.image_paths)}"
-        state.batch_results_dir = self.output_dir
         
         self.batch_started.emit(len(self.image_paths))
         
@@ -209,6 +210,7 @@ class BatchProcessingManager(QObject):
             self._on_cancel_finished()
 
     def _on_worker_thread_finished(self):
+        logger.info("BatchManager: Worker thread finished.")
         if self._is_cancelled:
             logger.info("BatchManager: Worker thread finished after cancellation request.")
             self._on_cancel_finished()
@@ -223,6 +225,18 @@ class BatchProcessingManager(QObject):
 
     def analyze_next_image(self):
         if self._is_cancelled:
+            return
+
+        # Deterministic worker lifecycle validation guards
+        if self.active_worker is not None:
+            logger.error("BatchManager: Lifecycle violation - active_worker is not None before starting next image.")
+            return
+        destroying_worker = getattr(self, "_destroying_worker_ref", None)
+        if destroying_worker is not None and destroying_worker() is not None:
+            logger.error("BatchManager: Lifecycle violation - previous worker is still destroying before starting next image.")
+            return
+        if getattr(self, "_on_cleanup_finished_callback", None) is not None:
+            logger.error("BatchManager: Lifecycle violation - pending cleanup callback exists before starting next image.")
             return
             
         if self.current_idx >= len(self.image_paths):
@@ -261,6 +275,8 @@ class BatchProcessingManager(QObject):
         # Start AnalysisWorker background thread
         worker_params = self.parameters.copy()
         
+        logger.info("BatchManager: Creating and starting new worker for image %d/%d: %s", 
+                    self.current_idx + 1, len(self.image_paths), image_name)
         self.active_worker = AnalysisWorker(image_path, worker_params)
         self.active_worker.finished_successfully.connect(self._on_image_completed)
         self.active_worker.failed.connect(self._on_image_failed, Qt.QueuedConnection)
@@ -396,14 +412,27 @@ class BatchProcessingManager(QObject):
         self.image_runtimes.append(duration)
 
         self.current_idx += 1
-        self._cleanup_active_worker()
 
         if self._is_cancelled:
-            self._on_cancel_finished()
+            self._cleanup_active_worker(self._on_cancel_finished)
         elif self._is_paused_requested:
-            self._on_pause_finished()
+            self._cleanup_active_worker(self._on_pause_finished)
+        elif self.current_idx >= len(self.image_paths):
+            self._cleanup_active_worker(self.finalize_batch)
         else:
-            QTimer.singleShot(0, self.analyze_next_image)
+            self._cleanup_active_worker(self._on_ready_for_next_image)
+
+    def _on_ready_for_next_image(self):
+        logger.info("BatchManager: Ready for next image. Scheduling analyze_next_image.")
+        QTimer.singleShot(0, self.analyze_next_image)
+
+    def _on_worker_destroyed(self):
+        logger.info("BatchManager: Worker thread QObject destroyed.")
+        self._destroying_worker_ref = None
+        callback = getattr(self, "_on_cleanup_finished_callback", None)
+        if callback:
+            self._on_cleanup_finished_callback = None
+            callback()
 
     def _on_image_failed(self, error_msg: str):
         image_path = self.image_paths[self.current_idx]
@@ -687,33 +716,56 @@ class BatchProcessingManager(QObject):
             return f"{mins}m {secs}s"
         return f"{secs}s"
 
-    def _cleanup_active_worker(self):
+    def _cleanup_active_worker(self, callback=None):
         """Ensures active worker thread is gracefully quit, waited on, and deleted."""
-        if self.active_worker:
-            logger.info("BatchManager: Performing safe worker thread cleanup.")
+        if not self.active_worker:
+            if callback:
+                callback()
+            return
+
+        self._on_cleanup_finished_callback = callback
+        
+        logger.info("BatchManager: Performing safe worker thread cleanup.")
+        worker = self.active_worker
+        self.active_worker = None
+        
+        import weakref
+        self._destroying_worker_ref = weakref.ref(worker)
+        
+        try:
             try:
-                try:
-                    self.active_worker.finished_successfully.disconnect()
-                except Exception:
-                    pass
-                try:
-                    self.active_worker.failed.disconnect()
-                except Exception:
-                    pass
-                try:
-                    self.active_worker.finished.disconnect()
-                except Exception:
-                    pass
+                worker.finished_successfully.disconnect()
+            except Exception:
+                pass
+            try:
+                worker.failed.disconnect()
+            except Exception:
+                pass
+            try:
+                worker.finished.disconnect()
+            except Exception:
+                pass
+            
+            worker.destroyed.connect(self._on_worker_destroyed)
+            
+            if worker.isRunning():
+                logger.info("BatchManager: Worker thread is still running. Requesting exit...")
+                worker.cancel()
+                worker.quit()
+                if not worker.wait(5000):
+                    logger.warning("BatchManager: Worker thread wait timed out. Terminating...")
+                    worker.terminate()
+                    worker.wait()
+            else:
+                worker.wait()
                 
-                if self.active_worker.isRunning():
-                    self.active_worker.cancel()
-                    self.active_worker.quit()
-                    self.active_worker.wait()
-                self.active_worker.deleteLater()
-            except Exception as e:
-                logger.error("BatchManager: Exception during worker cleanup: %s", e)
-            finally:
-                self.active_worker = None
+            logger.info("BatchManager: Worker thread joined successfully. Calling deleteLater.")
+            worker.deleteLater()
+        except Exception as e:
+            logger.error("BatchManager: Exception during worker cleanup: %s", e)
+            self._destroying_worker_ref = None
+            if callback:
+                callback()
 
     def reset_batch(self):
         """Resets the batch manager singleton to fresh idle state."""

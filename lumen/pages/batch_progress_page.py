@@ -308,6 +308,10 @@ class BatchProgressPage(QWidget):
 
     def add_log_entry(self, filename: str, status: str):
         """Appends a row to the log console with colored status tags."""
+        # Guard: don't touch widgets if this page is not currently visible.
+        # showEvent() replays all missing records from batch_manager.summary_records on return.
+        if not self.isVisible():
+            return
         row = QWidget()
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(4, 2, 4, 2)
@@ -341,6 +345,9 @@ class BatchProgressPage(QWidget):
 
     @Slot(int)
     def _on_batch_started(self, total: int):
+        # Guard: don't update stale UI widgets when page is hidden.
+        if not self.isVisible():
+            return
         self.total_images = total
         self.results_dir = ""  # Reset results folder path
         self.total_val.setText(str(total))
@@ -381,6 +388,9 @@ class BatchProgressPage(QWidget):
 
     @Slot(int, int, str)
     def _on_batch_progress_updated(self, completed: int, failed: int, current_image_name: str):
+        # Guard: don't update stale UI widgets when page is hidden.
+        if not self.isVisible():
+            return
         processed = completed + failed
         self.progress_bar.setValue(processed)
         
@@ -405,6 +415,10 @@ class BatchProgressPage(QWidget):
 
     @Slot(int, int, str)
     def _on_batch_finished(self, completed: int, failed: int, results_dir: str):
+        # Guard: don't touch UI widgets when page is hidden.
+        # sync_ui_state() in showEvent() will reconstruct from batch_manager on return.
+        if not self.isVisible():
+            return
         self.results_dir = results_dir
         self.progress_bar.setValue(self.total_images)
         self.status_lbl.setText("Batch execution complete!")
@@ -458,11 +472,13 @@ class BatchProgressPage(QWidget):
 
     @Slot()
     def _on_batch_paused(self):
-        self.sync_ui_state()
+        if self.isVisible():
+            self.sync_ui_state()
 
     @Slot()
     def _on_batch_resumed(self):
-        self.sync_ui_state()
+        if self.isVisible():
+            self.sync_ui_state()
 
     def _on_cancel_clicked(self):
         self.cancel_btn.setText("Cancelling...")

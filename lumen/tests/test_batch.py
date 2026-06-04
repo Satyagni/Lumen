@@ -303,6 +303,10 @@ class TestLumenBatchPipeline(unittest.TestCase):
         """Verifies that the batch manager tracks individual image runtimes and the page computes adaptive remaining time correctly."""
         from lumen.pages.batch_progress_page import BatchProgressPage
         page = BatchProgressPage()
+        # Show the page so isVisible() guards in signal handlers are satisfied.
+        # In real usage BatchProgressPage is always navigated-to (and thus visible) before
+        # batch_started fires, so this matches the actual runtime invariant.
+        page.show()
         
         # Ensure batch manager lifecycle state is RUNNING during progress tracking simulation
         batch_manager.lifecycle_state = "RUNNING"

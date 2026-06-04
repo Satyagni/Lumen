@@ -1274,9 +1274,42 @@ class AnalysisPage(QWidget):
             self.edit_btn.setEnabled(True)
         else:
             self.edit_btn.setEnabled(False)
-            
+
+        # --- Dirty-state tracking for reanalysis ---
+        # Compare new scientific results against the last committed snapshot.
+        # If they differ (any origin type), mark session dirty so Save/Reset become available.
+        image_path = state.current_image_path
+        if image_path:
+            session = state.workspace_manager.get_analysis_session(
+                image_path, state.workspace_manager._active_analysis_origin
+            )
+            if session:
+                new_cell_count = results.get("cell_count")
+                committed = session.committed_results
+                if committed is None:
+                    # First ever result for this image — committed_results not yet set.
+                    # Only mark dirty if actual masks were produced (non-trivial result).
+                    if new_cell_count is not None:
+                        state.is_dirty = True
+                        logger.info("AnalysisPage: First analysis result produced, marking session dirty.")
+                else:
+                    committed_cell_count = committed.get("cell_count")
+                    if new_cell_count != committed_cell_count:
+                        state.is_dirty = True
+                        logger.info(
+                            "AnalysisPage: Reanalysis produced different results "
+                            "(prev cell_count=%s, new cell_count=%s). Marking session dirty.",
+                            committed_cell_count, new_cell_count
+                        )
+                    else:
+                        logger.info(
+                            "AnalysisPage: Reanalysis result matches committed snapshot (cell_count=%s). "
+                            "Dirty state unchanged.", new_cell_count
+                        )
+
         # Trigger lightweight session checkpoint save
         self._save_to_session()
+
 
     @Slot(str)
     def _on_page_changed(self, page_name: str):

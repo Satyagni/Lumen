@@ -914,6 +914,10 @@ class BatchResultsExplorerPage(QWidget):
                 self.image_viewer.set_mask_opacity(self.opacity_slider.value())
 
     def _render_metadata_fields(self, record: dict):
+        # Guard: meta_grid may be transiently None during _reset_explorer_state()
+        if self.meta_grid is None:
+            logger.warning("BatchExplorer: _render_metadata_fields called with meta_grid=None, skipping.")
+            return
         grid = self.meta_grid
         theme = theme_service.current_theme
         
@@ -956,9 +960,15 @@ class BatchResultsExplorerPage(QWidget):
             row += 1
 
     def _clear_metadata_panel(self):
+        # Guard: meta_grid may be transiently None during _reset_explorer_state()
+        if self.meta_grid is None:
+            return
         # Delete widgets
         for i in reversed(range(self.meta_grid.count())):
-            widget = self.meta_grid.itemAt(i).widget()
+            item = self.meta_grid.itemAt(i)
+            if item is None:
+                continue
+            widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
 

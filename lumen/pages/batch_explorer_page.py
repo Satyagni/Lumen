@@ -807,10 +807,12 @@ class BatchResultsExplorerPage(QWidget):
                             diam = float(row[2])
                             cx = float(row[3])
                             cy = float(row[4])
+                            diam_est = float(row[5]) if len(row) > 5 else diam
                             cell_metrics[cell_id] = {
                                 "area_px": area_px,
                                 "diameter_px": diam,
-                                "centroid": (cx, cy)
+                                "centroid": (cx, cy),
+                                "diameter_estimate": diam_est
                             }
             except Exception as e:
                 logger.error("BatchExplorer: Failed to parse cell CSV: %s", e)
@@ -975,18 +977,32 @@ class BatchResultsExplorerPage(QWidget):
                             diam = float(row[2])
                             cx = float(row[3])
                             cy = float(row[4])
+                            diam_est = float(row[5]) if len(row) > 5 else diam
                             cell_metrics[cell_id] = {
                                 "area_px": area_px,
                                 "diameter_px": diam,
-                                "centroid": (cx, cy)
+                                "centroid": (cx, cy),
+                                "diameter_estimate": diam_est
                             }
             except Exception as e:
                 logger.error("BatchExplorer: Failed to parse cell CSV: %s", e)
+
+        # Load edit operation log if exists
+        edit_log = []
+        edit_log_path = self.batch_dir / image_name / f"{image_name}_edit_log.json"
+        if edit_log_path.exists():
+            try:
+                import json
+                with open(edit_log_path, mode="r", encoding="utf-8") as f:
+                    edit_log = json.load(f)
+            except Exception as e:
+                logger.error("BatchExplorer: Failed to load edit log: %s", e)
 
         # Reconstruct Results dictionary matching Cellpose output schema
         results = {
             "masks": masks,
             "cell_metrics": cell_metrics,
+            "edit_operation_log": edit_log,
             "cell_count": int(record.get("cell_count") or 0),
             "average_diameter_px": float(record.get("average_diameter_px") or 0.0),
             "mean_cell_area_px": float(record.get("mean_area_px") or 0.0),

@@ -3,7 +3,8 @@ import colorsys
 import numpy as np
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QSlider, QLabel, QFrame,
-    QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsEllipseItem, QButtonGroup, QMessageBox
+    QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsEllipseItem, QButtonGroup, QMessageBox,
+    QGridLayout, QWidget, QSpinBox
 )
 from PySide6.QtCore import Qt, Slot, Signal
 from PySide6.QtGui import QPixmap, QImage, QColor, QPen, QBrush, QPainter
@@ -11,15 +12,11 @@ from PySide6.QtGui import QPixmap, QImage, QColor, QPen, QBrush, QPainter
 from lumen.core.logger import logger
 from lumen.core.services.theme_service import theme_service
 
-def update_results_mask(original_results: dict, edited_mask: np.ndarray) -> dict:
-    """Updates masks, cell_count, cell_metrics, and statistics in results dictionary."""
-    new_results = dict(original_results)
-    new_results["masks"] = edited_mask
-    
+def update_results_mask(original_results: dict, edited_mask: np.ndarray, edit_log: list = None) -> dict:
+    """Updates masks, cell_count, cell_metrics, and statistics in results dictionary by fully rebuilding from scratch."""
     unique_labels = np.unique(edited_mask)
-    valid_labels = [label for label in unique_labels if label != 0]
+    valid_labels = [int(label) for label in unique_labels if label != 0]
     cell_count = len(valid_labels)
-    new_results["cell_count"] = cell_count
     
     cell_metrics = {}
     cell_areas = []
@@ -32,14 +29,13 @@ def update_results_mask(original_results: dict, edited_mask: np.ndarray) -> dict
             mean_y, mean_x = np.mean(indices, axis=0)
             diameter = round(2 * np.sqrt(area / np.pi), 2)
             diams.append(diameter)
-            cell_metrics[int(label)] = {
+            cell_metrics[label] = {
                 "area_px": int(area),
                 "centroid": (round(float(mean_x), 1), round(float(mean_y), 1)),
-                "diameter_px": float(diameter)
+                "diameter_px": float(diameter),
+                "diameter_estimate": float(diameter)
             }
             
-    new_results["cell_metrics"] = cell_metrics
-    
     if cell_count > 0:
         mean_cell_area_px = float(np.mean(cell_areas))
         median_cell_area_px = float(np.median(cell_areas))
@@ -49,14 +45,24 @@ def update_results_mask(original_results: dict, edited_mask: np.ndarray) -> dict
         median_cell_area_px = 0.0
         avg_diameter = 0.0
         
-    new_results["average_diameter_px"] = round(avg_diameter, 2)
-    new_results["mean_cell_area_px"] = round(mean_cell_area_px, 2)
-    new_results["median_cell_area_px"] = round(median_cell_area_px, 2)
-    
-    # Update cell density
     h, w = edited_mask.shape[:2]
     image_area = h * w
-    new_results["cell_density"] = float(cell_count / image_area) if image_area > 0 else 0.0
+    cell_density = float(cell_count / image_area) if image_area > 0 else 0.0
+    
+    # Rebuild canonical dictionary from scratch to avoid any patching or incremental pollution
+    new_results = {
+        "masks": edited_mask,
+        "cell_count": cell_count,
+        "cell_metrics": cell_metrics,
+        "average_diameter_px": round(avg_diameter, 2),
+        "mean_cell_area_px": round(mean_cell_area_px, 2),
+        "median_cell_area_px": round(median_cell_area_px, 2),
+        "cell_density": cell_density,
+        "model_type": original_results.get("model_type", "cyto") if original_results else "cyto",
+        "processing_time_s": original_results.get("processing_time_s", 0.0) if original_results else 0.0,
+        "used_gpu": original_results.get("used_gpu", False) if original_results else False,
+        "edit_operation_log": edit_log if edit_log is not None else (original_results.get("edit_operation_log", []) if original_results else [])
+    }
     
     return new_results
 
@@ -118,6 +124,7 @@ class MaskEditorCanvas(QGraphicsView):
         # Capped undo/redo stacks (max 10 items)
         self.undo_stack = []
         self.redo_stack = []
+        self.edit_operation_log = []
 
     @property
     def selected_label_id(self):
@@ -132,12 +139,13 @@ class MaskEditorCanvas(QGraphicsView):
         else:
             self.selected_labels.clear()
 
-    def set_data(self, pixmap: QPixmap, mask_arr: np.ndarray, color_lut: np.ndarray):
+    def set_data(self, pixmap: QPixmap, mask_arr: np.ndarray, color_lut: np.ndarray, edit_log: list = None):
         """Loads Raw pixmap and segmentation mask array into drawing scene."""
         self.working_mask = mask_arr
         self.color_lut = color_lut
         self.selected_labels.clear()
         self.selected_label_id = None
+        self.edit_operation_log = list(edit_log) if edit_log is not None else []
         
         # Clear selection overlay if present
         if self.selection_item:
@@ -338,6 +346,12 @@ class MaskEditorCanvas(QGraphicsView):
         if self.working_mask is None or not self.selected_labels:
             return
         self.push_undo()
+        deleted_ids = [int(label) for label in self.selected_labels]
+        self.edit_operation_log.append({
+            "operation_type": "DELETE_CELL",
+            "affected_cell_ids": deleted_ids,
+            "details": {}
+        })
         for label in self.selected_labels:
             self.working_mask[self.working_mask == label] = 0
         self.selected_labels.clear()
@@ -351,6 +365,15 @@ class MaskEditorCanvas(QGraphicsView):
             return
         self.push_undo()
         surviving_id = min(self.selected_labels)
+        merged_ids = [int(label) for label in self.selected_labels if label != surviving_id]
+        self.edit_operation_log.append({
+            "operation_type": "MERGE",
+            "affected_cell_ids": [int(l) for l in self.selected_labels],
+            "details": {
+                "primary_id": int(surviving_id),
+                "merged_ids": merged_ids
+            }
+        })
         for label in self.selected_labels:
             if label != surviving_id:
                 self.working_mask[self.working_mask == label] = surviving_id
@@ -365,6 +388,11 @@ class MaskEditorCanvas(QGraphicsView):
             return
         # Generate a brand new label ID
         new_id = int(np.max(self.working_mask) + 1) if self.working_mask.size > 0 else 1
+        self.edit_operation_log.append({
+            "operation_type": "ADD_CELL",
+            "affected_cell_ids": [new_id],
+            "details": {}
+        })
         self.ensure_lut_color(new_id)
         self.selected_labels = {new_id}
         self.selected_label_id = new_id
@@ -497,6 +525,24 @@ class MaskEditorCanvas(QGraphicsView):
                 self.last_scene_pos = None
                 self.update_selection_highlight()
                 self.selection_changed.emit()
+                
+                # Log BRUSH_EDIT with coalescing for consecutive strokes on the same cell ID
+                last_op = self.edit_operation_log[-1] if self.edit_operation_log else None
+                cell_id_int = int(self.selected_label_id) if self.selected_label_id else None
+                if (last_op and 
+                    last_op.get("operation_type") == "BRUSH_EDIT" and 
+                    last_op.get("affected_cell_ids") == [cell_id_int]):
+                    # Coalesce (do not append new log entry)
+                    pass
+                else:
+                    self.edit_operation_log.append({
+                        "operation_type": "BRUSH_EDIT",
+                        "affected_cell_ids": [cell_id_int] if cell_id_int is not None else [],
+                        "details": {
+                            "mode": self.brush_mode,
+                            "size": self.brush_size
+                        }
+                    })
             elif getattr(self, "_is_panning", False):
                 self._is_panning = False
                 self.setCursor(Qt.ArrowCursor)
@@ -588,12 +634,15 @@ class MaskEditorCanvas(QGraphicsView):
 class MaskEditorDialog(QDialog):
     """Scientific manual mask correction dialog containing brushes, sliders, and canvas views."""
 
-    def __init__(self, image_path: str, original_mask: np.ndarray, parent=None):
+    def __init__(self, image_path: str, original_mask: np.ndarray, parent=None, edit_log: list = None):
         super().__init__(parent)
         self.setWindowTitle("Manual Mask Refinement")
-        self.setMinimumSize(1000, 700)
+        self.setMinimumSize(700, 500)
+        self.resize(1100, 750)
         self.setObjectName("MaskEditorDialog")
         self.edited_mask = None
+        self.edit_log_initial = edit_log
+        self.edit_operation_log = []
         
         # Maximize and minimize flags
         self.setWindowFlags(self.windowFlags() | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
@@ -653,9 +702,9 @@ class MaskEditorDialog(QDialog):
         # 2. Toolbar layout
         self.toolbar = QFrame()
         self.toolbar.setObjectName("EditorToolbar")
-        toolbar_layout = QHBoxLayout(self.toolbar)
-        toolbar_layout.setContentsMargins(8, 8, 8, 8)
-        toolbar_layout.setSpacing(12)
+        self.toolbar_layout = QGridLayout(self.toolbar)
+        self.toolbar_layout.setContentsMargins(8, 8, 8, 8)
+        self.toolbar_layout.setSpacing(8)
 
         self.btn_group = QButtonGroup(self)
         self.btn_group.setExclusive(True)
@@ -677,15 +726,31 @@ class MaskEditorDialog(QDialog):
         self.btn_group.addButton(self.add_btn)
         self.btn_group.addButton(self.erase_btn)
 
-        toolbar_layout.addWidget(self.pointer_btn)
-        toolbar_layout.addWidget(self.add_btn)
-        toolbar_layout.addWidget(self.erase_btn)
+        # Mode Group Widget
+        self.mode_widget = QWidget()
+        mode_layout = QHBoxLayout(self.mode_widget)
+        mode_layout.setContentsMargins(0, 0, 0, 0)
+        mode_layout.setSpacing(6)
+        mode_layout.addWidget(self.pointer_btn)
+        mode_layout.addWidget(self.add_btn)
+        mode_layout.addWidget(self.erase_btn)
 
-        # Separator after Brushes
-        sep1 = QFrame()
-        sep1.setFrameShape(QFrame.VLine)
-        sep1.setStyleSheet("background-color: #2B2B35; max-width: 1px;")
-        toolbar_layout.addWidget(sep1)
+        # Separators
+        self.sep1 = QFrame()
+        self.sep1.setFrameShape(QFrame.VLine)
+        self.sep1.setStyleSheet("background-color: #2B2B35; max-width: 1px;")
+
+        self.sep2 = QFrame()
+        self.sep2.setFrameShape(QFrame.VLine)
+        self.sep2.setStyleSheet("background-color: #2B2B35; max-width: 1px;")
+
+        self.sep3 = QFrame()
+        self.sep3.setFrameShape(QFrame.VLine)
+        self.sep3.setStyleSheet("background-color: #2B2B35; max-width: 1px;")
+
+        self.sep4 = QFrame()
+        self.sep4.setFrameShape(QFrame.VLine)
+        self.sep4.setStyleSheet("background-color: #2B2B35; max-width: 1px;")
 
         # Cell Actions
         self.new_cell_btn = QPushButton("➕ New Cell")
@@ -703,20 +768,31 @@ class MaskEditorDialog(QDialog):
         self.reset_btn = QPushButton("🔄 Reset All")
         self.reset_btn.setCursor(Qt.PointingHandCursor)
 
-        toolbar_layout.addWidget(self.new_cell_btn)
-        toolbar_layout.addWidget(self.delete_btn)
-        toolbar_layout.addWidget(self.merge_btn)
-        toolbar_layout.addWidget(self.reset_btn)
+        # Action Group Widget
+        self.action_widget = QWidget()
+        action_layout = QHBoxLayout(self.action_widget)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(6)
+        action_layout.addWidget(self.new_cell_btn)
+        action_layout.addWidget(self.delete_btn)
+        action_layout.addWidget(self.merge_btn)
+        action_layout.addWidget(self.reset_btn)
 
-        # Separator after Actions
-        sep_actions = QFrame()
-        sep_actions.setFrameShape(QFrame.VLine)
-        sep_actions.setStyleSheet("background-color: #2B2B35; max-width: 1px;")
-        toolbar_layout.addWidget(sep_actions)
+        # Precision Brush Size controls
+        self.minus_btn = QPushButton("-")
+        self.minus_btn.setFixedSize(28, 26)
+        self.minus_btn.setCursor(Qt.PointingHandCursor)
 
-        # Slider and Label
-        self.size_lbl = QLabel("Size: 10px")
-        self.size_lbl.setStyleSheet("font-size: 11px; font-weight: bold; min-width: 70px;")
+        self.size_spin = QSpinBox()
+        self.size_spin.setRange(1, 100)
+        self.size_spin.setValue(10)
+        self.size_spin.setButtonSymbols(QSpinBox.NoButtons)
+        self.size_spin.setAlignment(Qt.AlignCenter)
+        self.size_spin.setFixedWidth(45)
+
+        self.plus_btn = QPushButton("+")
+        self.plus_btn.setFixedSize(28, 26)
+        self.plus_btn.setCursor(Qt.PointingHandCursor)
         
         self.size_slider = QSlider(Qt.Horizontal)
         self.size_slider.setRange(1, 100)
@@ -724,14 +800,18 @@ class MaskEditorDialog(QDialog):
         self.size_slider.setFixedWidth(120)
         self.size_slider.setCursor(Qt.PointingHandCursor)
 
-        toolbar_layout.addWidget(self.size_lbl)
-        toolbar_layout.addWidget(self.size_slider)
-
-        # Separator
-        sep2 = QFrame()
-        sep2.setFrameShape(QFrame.VLine)
-        sep2.setStyleSheet("background-color: #2B2B35; max-width: 1px;")
-        toolbar_layout.addWidget(sep2)
+        # Size Group Widget
+        self.size_widget = QWidget()
+        size_layout = QHBoxLayout(self.size_widget)
+        size_layout.setContentsMargins(0, 0, 0, 0)
+        size_layout.setSpacing(6)
+        self.size_title_lbl = QLabel("Size:")
+        self.size_title_lbl.setStyleSheet("font-size: 11px; font-weight: bold;")
+        size_layout.addWidget(self.size_title_lbl)
+        size_layout.addWidget(self.minus_btn)
+        size_layout.addWidget(self.size_spin)
+        size_layout.addWidget(self.plus_btn)
+        size_layout.addWidget(self.size_slider)
 
         # Undo/Redo Buttons
         self.undo_btn = QPushButton("↩ Undo")
@@ -740,20 +820,44 @@ class MaskEditorDialog(QDialog):
         self.redo_btn = QPushButton("↪ Redo")
         self.redo_btn.setCursor(Qt.PointingHandCursor)
 
-        toolbar_layout.addWidget(self.undo_btn)
-        toolbar_layout.addWidget(self.redo_btn)
+        # History Group Widget
+        self.history_widget = QWidget()
+        history_layout = QHBoxLayout(self.history_widget)
+        history_layout.setContentsMargins(0, 0, 0, 0)
+        history_layout.setSpacing(6)
+        history_layout.addWidget(self.undo_btn)
+        history_layout.addWidget(self.redo_btn)
 
-        toolbar_layout.addStretch(1)
-
-        # Cancel/Save
+        # Cancel/Save Buttons
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setCursor(Qt.PointingHandCursor)
 
         self.save_btn = QPushButton("Apply Changes")
         self.save_btn.setCursor(Qt.PointingHandCursor)
 
-        toolbar_layout.addWidget(self.cancel_btn)
-        toolbar_layout.addWidget(self.save_btn)
+        # Set minimum widths on all buttons to prevent truncation
+        self.pointer_btn.setMinimumWidth(85)
+        self.add_btn.setMinimumWidth(95)
+        self.erase_btn.setMinimumWidth(105)
+        self.new_cell_btn.setMinimumWidth(95)
+        self.delete_btn.setMinimumWidth(125)
+        self.merge_btn.setMinimumWidth(120)
+        self.reset_btn.setMinimumWidth(95)
+        self.undo_btn.setMinimumWidth(80)
+        self.redo_btn.setMinimumWidth(80)
+        self.cancel_btn.setMinimumWidth(85)
+        self.save_btn.setMinimumWidth(120)
+
+        # Dialog Buttons Group Widget
+        self.dialog_widget = QWidget()
+        dialog_layout = QHBoxLayout(self.dialog_widget)
+        dialog_layout.setContentsMargins(0, 0, 0, 0)
+        dialog_layout.setSpacing(6)
+        dialog_layout.addWidget(self.cancel_btn)
+        dialog_layout.addWidget(self.save_btn)
+
+        # Do initial responsive layout layout population
+        self._update_toolbar_layout()
 
         layout.addWidget(self.toolbar)
 
@@ -762,13 +866,16 @@ class MaskEditorDialog(QDialog):
         layout.addWidget(self.canvas, 1)
 
         # Attach raw elements to canvas
-        self.canvas.set_data(self.pixmap, self.working_mask, self.color_lut)
+        self.canvas.set_data(self.pixmap, self.working_mask, self.color_lut, edit_log=self.edit_log_initial)
 
         # Connect actions
         self.pointer_btn.clicked.connect(self._set_pointer_mode)
         self.add_btn.clicked.connect(self._set_add_mode)
         self.erase_btn.clicked.connect(self._set_erase_mode)
         self.size_slider.valueChanged.connect(self._on_size_changed)
+        self.size_spin.valueChanged.connect(self._on_spin_changed)
+        self.minus_btn.clicked.connect(self._on_minus_clicked)
+        self.plus_btn.clicked.connect(self._on_plus_clicked)
         self.undo_btn.clicked.connect(self.canvas.undo)
         self.redo_btn.clicked.connect(self.canvas.redo)
         self.save_btn.clicked.connect(self.accept)
@@ -791,7 +898,97 @@ class MaskEditorDialog(QDialog):
 
     def _on_size_changed(self, value: int):
         self.canvas.brush_size = value
-        self.size_lbl.setText(f"Size: {value}px")
+        self.size_spin.blockSignals(True)
+        self.size_spin.setValue(value)
+        self.size_spin.blockSignals(False)
+
+    def _on_spin_changed(self, value: int):
+        self.canvas.brush_size = value
+        self.size_slider.blockSignals(True)
+        self.size_slider.setValue(value)
+        self.size_slider.blockSignals(False)
+
+    def _on_minus_clicked(self):
+        self.size_spin.setValue(max(1, self.size_spin.value() - 1))
+
+    def _on_plus_clicked(self):
+        self.size_spin.setValue(min(100, self.size_spin.value() + 1))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_toolbar_layout()
+
+    def _update_toolbar_layout(self):
+        w = self.width()
+        
+        self.toolbar_layout.removeWidget(self.mode_widget)
+        self.toolbar_layout.removeWidget(self.sep1)
+        self.toolbar_layout.removeWidget(self.size_widget)
+        self.toolbar_layout.removeWidget(self.sep2)
+        self.toolbar_layout.removeWidget(self.history_widget)
+        self.toolbar_layout.removeWidget(self.action_widget)
+        self.toolbar_layout.removeWidget(self.sep3)
+        self.toolbar_layout.removeWidget(self.sep4)
+        self.toolbar_layout.removeWidget(self.dialog_widget)
+        
+        # Reset stretches
+        for i in range(10):
+            self.toolbar_layout.setColumnStretch(i, 0)
+            
+        if w >= 1250:
+            # Wide layout (1 row)
+            self.toolbar_layout.addWidget(self.mode_widget, 0, 0, Qt.AlignVCenter | Qt.AlignLeft)
+            self.toolbar_layout.addWidget(self.sep1, 0, 1, Qt.AlignVCenter)
+            self.toolbar_layout.addWidget(self.action_widget, 0, 2, Qt.AlignVCenter | Qt.AlignLeft)
+            self.toolbar_layout.addWidget(self.sep2, 0, 3, Qt.AlignVCenter)
+            self.toolbar_layout.addWidget(self.size_widget, 0, 4, Qt.AlignVCenter | Qt.AlignLeft)
+            self.toolbar_layout.addWidget(self.sep3, 0, 5, Qt.AlignVCenter)
+            self.toolbar_layout.addWidget(self.history_widget, 0, 6, Qt.AlignVCenter | Qt.AlignLeft)
+            self.toolbar_layout.addWidget(self.sep4, 0, 7, Qt.AlignVCenter)
+            self.toolbar_layout.addWidget(self.dialog_widget, 0, 8, Qt.AlignVCenter | Qt.AlignRight)
+            
+            self.toolbar_layout.setColumnStretch(8, 1)
+            
+            self.sep1.setVisible(True)
+            self.sep2.setVisible(True)
+            self.sep3.setVisible(True)
+            self.sep4.setVisible(True)
+        elif w >= 920:
+            # Medium layout (2 rows)
+            self.toolbar_layout.addWidget(self.mode_widget, 0, 0, Qt.AlignVCenter | Qt.AlignLeft)
+            self.toolbar_layout.addWidget(self.sep1, 0, 1, Qt.AlignVCenter)
+            self.toolbar_layout.addWidget(self.size_widget, 0, 2, Qt.AlignVCenter | Qt.AlignLeft)
+            self.toolbar_layout.addWidget(self.sep2, 0, 3, Qt.AlignVCenter)
+            self.toolbar_layout.addWidget(self.history_widget, 0, 4, Qt.AlignVCenter | Qt.AlignLeft)
+            
+            self.toolbar_layout.addWidget(self.action_widget, 1, 0, 1, 3, Qt.AlignVCenter | Qt.AlignLeft)
+            self.toolbar_layout.addWidget(self.sep3, 1, 3, Qt.AlignVCenter)
+            self.toolbar_layout.addWidget(self.dialog_widget, 1, 4, 1, 2, Qt.AlignVCenter | Qt.AlignRight)
+            
+            self.toolbar_layout.setColumnStretch(5, 1)
+            
+            self.sep1.setVisible(True)
+            self.sep2.setVisible(True)
+            self.sep3.setVisible(True)
+            self.sep4.setVisible(False)
+        else:
+            # Narrow layout (3 rows)
+            self.toolbar_layout.addWidget(self.mode_widget, 0, 0, Qt.AlignVCenter | Qt.AlignLeft)
+            self.toolbar_layout.addWidget(self.sep1, 0, 1, Qt.AlignVCenter)
+            self.toolbar_layout.addWidget(self.size_widget, 0, 2, Qt.AlignVCenter | Qt.AlignLeft)
+            
+            self.toolbar_layout.addWidget(self.action_widget, 1, 0, 1, 3, Qt.AlignVCenter | Qt.AlignLeft)
+            
+            self.toolbar_layout.addWidget(self.history_widget, 2, 0, Qt.AlignVCenter | Qt.AlignLeft)
+            self.toolbar_layout.addWidget(self.sep2, 2, 1, Qt.AlignVCenter)
+            self.toolbar_layout.addWidget(self.dialog_widget, 2, 2, Qt.AlignVCenter | Qt.AlignRight)
+            
+            self.toolbar_layout.setColumnStretch(2, 1)
+            
+            self.sep1.setVisible(True)
+            self.sep2.setVisible(True)
+            self.sep3.setVisible(False)
+            self.sep4.setVisible(False)
 
     def _on_new_cell_clicked(self):
         self.canvas.add_new_cell()
@@ -815,6 +1012,18 @@ class MaskEditorDialog(QDialog):
         )
         if reply == QMessageBox.Yes:
             self.canvas.push_undo()
+            
+            # Log DELETE_CELL for all existing cells
+            if self.canvas.working_mask is not None:
+                existing_labels = list(np.unique(self.canvas.working_mask))
+                existing_labels = [int(l) for l in existing_labels if l != 0]
+                if existing_labels:
+                    self.canvas.edit_operation_log.append({
+                        "operation_type": "DELETE_CELL",
+                        "affected_cell_ids": existing_labels,
+                        "details": {"action": "reset_all"}
+                    })
+            
             self.canvas.working_mask.fill(0)
             self.canvas.selected_labels.clear()
             self.canvas.selected_label_id = None
@@ -886,6 +1095,7 @@ class MaskEditorDialog(QDialog):
 
     def accept(self):
         self.edited_mask = self.canvas.working_mask
+        self.edit_operation_log = getattr(self.canvas, "edit_operation_log", [])
         super().accept()
 
     def reject(self):
@@ -949,6 +1159,37 @@ class MaskEditorDialog(QDialog):
             self.new_cell_btn.setStyleSheet(button_style)
             self.reset_btn.setStyleSheet(button_style)
             self.merge_btn.setStyleSheet(button_style)
+
+            # Style separators and size buttons for light theme
+            sep_style = "background-color: #D1D5DB; max-width: 1px;"
+            self.sep1.setStyleSheet(sep_style)
+            self.sep2.setStyleSheet(sep_style)
+            self.sep3.setStyleSheet(sep_style)
+            self.sep4.setStyleSheet(sep_style)
+            
+            size_btn_style = """
+                QPushButton {
+                    background-color: #FFFFFF;
+                    border: 1px solid #D1D5DB;
+                    color: #374151;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 14px;
+                }
+                QPushButton:hover { background-color: #F9FAFB; }
+            """
+            self.plus_btn.setStyleSheet(size_btn_style)
+            self.minus_btn.setStyleSheet(size_btn_style)
+            
+            self.size_spin.setStyleSheet("""
+                QSpinBox {
+                    background-color: #FFFFFF;
+                    border: 1px solid #D1D5DB;
+                    color: #374151;
+                    border-radius: 4px;
+                    font-size: 11px;
+                }
+            """)
 
             self.delete_btn.setStyleSheet("""
                 QPushButton {
@@ -1068,6 +1309,37 @@ class MaskEditorDialog(QDialog):
             self.new_cell_btn.setStyleSheet(button_style)
             self.reset_btn.setStyleSheet(button_style)
             self.merge_btn.setStyleSheet(button_style)
+
+            # Style separators and size buttons for dark theme
+            sep_style = "background-color: #2B2B35; max-width: 1px;"
+            self.sep1.setStyleSheet(sep_style)
+            self.sep2.setStyleSheet(sep_style)
+            self.sep3.setStyleSheet(sep_style)
+            self.sep4.setStyleSheet(sep_style)
+            
+            size_btn_style = """
+                QPushButton {
+                    background-color: #24242B;
+                    border: 1px solid #2B2B35;
+                    color: #9CA3AF;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 14px;
+                }
+                QPushButton:hover { background-color: #2D2D37; color: #FFFFFF; }
+            """
+            self.plus_btn.setStyleSheet(size_btn_style)
+            self.minus_btn.setStyleSheet(size_btn_style)
+            
+            self.size_spin.setStyleSheet("""
+                QSpinBox {
+                    background-color: #24242B;
+                    border: 1px solid #2B2B35;
+                    color: #9CA3AF;
+                    border-radius: 4px;
+                    font-size: 11px;
+                }
+            """)
 
             self.delete_btn.setStyleSheet("""
                 QPushButton {

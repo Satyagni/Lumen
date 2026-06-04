@@ -499,15 +499,18 @@ def export_cell_metrics_csv(file_path: str, cell_metrics: dict) -> bool:
     try:
         with open(file_path, mode="w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["cell_id", "area_px", "diameter_px", "centroid_x", "centroid_y"])
+            writer.writerow(["cell_id", "area_px", "diameter_px", "centroid_x", "centroid_y", "diameter_estimate"])
             for cell_id, metrics in sorted(cell_metrics.items()):
                 cx, cy = metrics["centroid"]
+                diam = metrics.get("diameter_px", 0.0)
+                diam_est = metrics.get("diameter_estimate", diam)
                 writer.writerow([
                     cell_id,
                     metrics["area_px"],
-                    metrics["diameter_px"],
+                    diam,
                     cx,
-                    cy
+                    cy,
+                    diam_est
                 ])
         return True
     except Exception as e:

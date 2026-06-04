@@ -165,7 +165,8 @@ class AnalysisWorker(QThread):
                     cell_metrics[int(label)] = {
                         "area_px": int(area),
                         "centroid": (round(float(mean_x), 1), round(float(mean_y), 1)),
-                        "diameter_px": float(diameter)
+                        "diameter_px": float(diameter),
+                        "diameter_estimate": float(diameter)
                     }
             
             if cell_count > 0:

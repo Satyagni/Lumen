@@ -1327,7 +1327,10 @@ class AnalysisPage(QWidget):
                 
             if edited_mask is not None:
                 # Update masks, cell_count, cell_metrics, areas, diameters, and densities
-                updated_results = update_results_mask(results, edited_mask)
+                edit_log = getattr(editor, "edit_operation_log", [])
+                if not isinstance(edit_log, list):
+                    edit_log = []
+                updated_results = update_results_mask(results, edited_mask, edit_log=edit_log)
                 
                 # Write to state bypass property setter side-effects (avoiding analysis_completed.emit)
                 state._analysis_results = updated_results
@@ -1387,6 +1390,18 @@ class AnalysisPage(QWidget):
             
         edited_mask = results["masks"]
         
+        # Explicitly recompute metrics from the latest committed edited mask before saving
+        from lumen.ui.mask_editor_dialog import update_results_mask
+        edit_log = results.get("edit_operation_log", [])
+        if not isinstance(edit_log, list):
+            edit_log = []
+        results = update_results_mask(results, edited_mask, edit_log=edit_log)
+        state._analysis_results = results
+        session = state.workspace_manager.get_analysis_session(image_path, state.current_origin_type)
+        if session:
+            session.analysis_results = results
+            session.committed_results = results
+        
         # Behavior depends on ORIGIN CONTEXT
         if state.current_origin_type == "batch":
             active_batch_dir = state.current_batch_origin_context
@@ -1433,6 +1448,12 @@ class AnalysisPage(QWidget):
                     # 2. Save cell metrics CSV
                     from lumen.pages.results_page import export_cell_metrics_csv
                     export_cell_metrics_csv(str(csv_path), results["cell_metrics"])
+                    
+                    # 2b. Save edit operation log JSON
+                    edit_log_path = img_folder / f"{filename}_edit_log.json"
+                    edit_log = results.get("edit_operation_log", [])
+                    with open(edit_log_path, "w", encoding="utf-8") as elf:
+                        json.dump(edit_log, elf, indent=2)
                     
                     # 3. Save visual overlay preview
                     from lumen.pages.results_page import generate_overlay_image

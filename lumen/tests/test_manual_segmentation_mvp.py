@@ -325,13 +325,16 @@ class TestManualSegmentationMVP(unittest.TestCase):
             self.assertEqual(session_b.origin_type, "batch")
             
             page._sync_state()
+            mask_5 = np.zeros((10, 10), dtype=np.uint16)
+            for i in range(1, 6):
+                mask_5[0, i-1] = i
             state.analysis_results = {
-                "masks": np.ones((10, 10), dtype=np.uint16),
+                "masks": mask_5,
                 "cell_count": 5,
-                "cell_metrics": {1: {"area_px": 20, "diameter_px": 4, "centroid": (5, 5)}},
-                "mean_cell_area_px": 20.0,
-                "median_cell_area_px": 20.0,
-                "average_diameter_px": 4.0,
+                "cell_metrics": {i: {"area_px": 1, "diameter_px": 1.13, "centroid": (0.0, float(i-1))} for i in range(1, 6)},
+                "mean_cell_area_px": 1.0,
+                "median_cell_area_px": 1.0,
+                "average_diameter_px": 1.13,
                 "cell_density": 0.05
             }
             state.is_dirty = True
@@ -341,7 +344,13 @@ class TestManualSegmentationMVP(unittest.TestCase):
             
             # Verify batch directory and files ARE updated
             self.assertTrue((batch_dir / "image_A.tif" / "image_A.tif_labels_raw.tif").exists())
-            self.assertTrue((batch_dir / "image_A.tif" / "image_A.tif_cell_metrics.csv").exists())
+            csv_path = batch_dir / "image_A.tif" / "image_A.tif_cell_metrics.csv"
+            self.assertTrue(csv_path.exists())
+            with open(csv_path, "r", encoding="utf-8") as f:
+                reader = csv.reader(f)
+                rows = list(reader)
+                # Header + 5 data rows = 6 rows
+                self.assertEqual(len(rows), 6)
             
             # Check summary csv has edited column and cell count updated to 5
             with open(summary_csv, "r", encoding="utf-8") as f:
@@ -965,6 +974,309 @@ class TestManualSegmentationMVP(unittest.TestCase):
         # Syncing state (like changing image or tab) should clear selection
         page._sync_state()
         self.assertIsNone(page.image_viewer.highlight_item)
+
+    def test_diameter_estimate_in_csv(self):
+        """Verifies that export_cell_metrics_csv writes the diameter_estimate column
+        and preserves positional column order.
+        """
+        import tempfile
+        import shutil
+        import csv
+        from lumen.pages.results_page import export_cell_metrics_csv
+        
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            csv_path = temp_dir / "test_metrics.csv"
+            cell_metrics = {
+                1: {
+                    "area_px": 50,
+                    "diameter_px": 8.0,
+                    "centroid": (10.5, 12.5),
+                    "diameter_estimate": 8.0
+                }
+            }
+            success = export_cell_metrics_csv(str(csv_path), cell_metrics)
+            self.assertTrue(success)
+            self.assertTrue(csv_path.exists())
+            
+            with open(csv_path, mode="r", newline="", encoding="utf-8") as f:
+                reader = csv.reader(f)
+                rows = list(reader)
+                
+                # Header row
+                self.assertEqual(rows[0], ["cell_id", "area_px", "diameter_px", "centroid_x", "centroid_y", "diameter_estimate"])
+                
+                # Data row (retains positional values at 0-4)
+                data = rows[1]
+                self.assertEqual(data[0], "1")
+                self.assertEqual(data[1], "50")
+                self.assertEqual(data[2], "8.0")
+                self.assertEqual(data[3], "10.5")
+                self.assertEqual(data[4], "12.5")
+                self.assertEqual(data[5], "8.0")
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_edit_operation_log_generation_and_saving(self):
+        """Verifies that manual operations are recorded in edit_operation_log,
+        consecutive brush edits on the same cell ID are coalesced, and the log is written to JSON on save.
+        """
+        import tempfile
+        import shutil
+        import json
+        from unittest.mock import MagicMock
+        from lumen.ui.mask_editor_dialog import MaskEditorDialog, update_results_mask
+        from lumen.pages.analysis_page import AnalysisPage
+        from lumen.workflows.state import state
+        
+        state.workspace_manager.reset_analysis_session()
+        state.reset_analysis_session()
+        
+        temp_dir = Path(tempfile.mkdtemp())
+        raw_images_dir = temp_dir / "raw_images"
+        batch_results_dir = temp_dir / "batch_results"
+        raw_images_dir.mkdir()
+        batch_results_dir.mkdir()
+        
+        try:
+            # 1. Setup dialog and canvas
+            img_path = raw_images_dir / "sample_img.tif"
+            import tifffile
+            tifffile.imwrite(str(img_path), np.zeros((10, 10), dtype=np.uint16))
+            
+            # Start a batch analysis session
+            state.current_image_path = str(img_path)
+            state.batch_results_dir = str(batch_results_dir)
+            session = state.workspace_manager.start_analysis_session(
+                str(img_path),
+                origin_type="batch",
+                batch_origin_context=str(batch_results_dir)
+            )
+            state.analysis_results = {
+                "masks": np.zeros((10, 10), dtype=np.uint16),
+                "cell_count": 0,
+                "cell_metrics": {},
+                "mean_cell_area_px": 0.0,
+                "median_cell_area_px": 0.0,
+                "average_diameter_px": 0.0,
+                "cell_density": 0.0
+            }
+            session.analysis_results = state.analysis_results
+            session.committed_results = state.analysis_results
+            state.is_dirty = False
+            
+            dialog = MaskEditorDialog(str(img_path), state.analysis_results["masks"])
+            canvas = dialog.canvas
+            
+            # Perform operations
+            canvas.add_new_cell()  # ADD_CELL (ID 1)
+            self.assertEqual(canvas.edit_operation_log[-1]["operation_type"], "ADD_CELL")
+            self.assertEqual(canvas.edit_operation_log[-1]["affected_cell_ids"], [1])
+            
+            # Simulate first brush stroke on cell 1
+            canvas.selected_label_id = 1
+            canvas.brush_mode = "add"
+            canvas.drawing = True
+            
+            # Release click -> finishes brush stroke
+            from PySide6.QtCore import Qt, QEvent, QPointF
+            from PySide6.QtGui import QMouseEvent
+            release_event = QMouseEvent(
+                QEvent.MouseButtonRelease,
+                QPointF(0.0, 0.0),
+                Qt.LeftButton,
+                Qt.LeftButton,
+                Qt.NoModifier
+            )
+            canvas.mouseReleaseEvent(release_event)
+            self.assertEqual(canvas.edit_operation_log[-1]["operation_type"], "BRUSH_EDIT")
+            self.assertEqual(canvas.edit_operation_log[-1]["affected_cell_ids"], [1])
+            log_length_after_first_brush = len(canvas.edit_operation_log)
+            
+            # Simulate second consecutive brush stroke on cell 1
+            canvas.drawing = True
+            canvas.mouseReleaseEvent(release_event)
+            # Should coalesce: log length shouldn't change
+            self.assertEqual(len(canvas.edit_operation_log), log_length_after_first_brush)
+            
+            # Simulate brush stroke on cell 2 after adding it
+            canvas.add_new_cell()  # ADD_CELL (ID 2)
+            canvas.selected_label_id = 2
+            canvas.drawing = True
+            canvas.mouseReleaseEvent(release_event)
+            # Log length should increase by 2 (ADD_CELL + BRUSH_EDIT on cell 2)
+            self.assertEqual(len(canvas.edit_operation_log), log_length_after_first_brush + 2)
+            self.assertEqual(canvas.edit_operation_log[-1]["affected_cell_ids"], [2])
+            
+            # Perform merge
+            canvas.selected_labels = {1, 2}
+            canvas.merge_selected_cells()  # MERGE
+            self.assertEqual(canvas.edit_operation_log[-1]["operation_type"], "MERGE")
+            self.assertEqual(canvas.edit_operation_log[-1]["affected_cell_ids"], [1, 2])
+            
+            # Perform delete
+            canvas.selected_labels = {1}
+            canvas.delete_selected_cells()  # DELETE_CELL
+            self.assertEqual(canvas.edit_operation_log[-1]["operation_type"], "DELETE_CELL")
+            self.assertEqual(canvas.edit_operation_log[-1]["affected_cell_ids"], [1])
+            
+            # Verify full log format
+            ops = [entry["operation_type"] for entry in canvas.edit_operation_log]
+            self.assertEqual(ops, ["ADD_CELL", "BRUSH_EDIT", "ADD_CELL", "BRUSH_EDIT", "MERGE", "DELETE_CELL"])
+            
+            # 2. Test saving and file serialization
+            page = AnalysisPage()
+            page._sync_state()
+            
+            dialog.accept()
+            # Feed dialog results back to page
+            updated_results = update_results_mask(state.analysis_results, dialog.edited_mask, edit_log=dialog.edit_operation_log)
+            state._analysis_results = updated_results
+            state.is_dirty = True
+            
+            # Save Analysis (writes files)
+            saved = page.save_analysis()
+            self.assertTrue(saved)
+            
+            # Verify json edit log exists
+            json_log_path = batch_results_dir / "sample_img.tif" / "sample_img.tif_edit_log.json"
+            self.assertTrue(json_log_path.exists())
+            
+            # Read back log
+            with open(json_log_path, "r", encoding="utf-8") as lf:
+                saved_log = json.load(lf)
+                self.assertEqual(len(saved_log), 6)
+                self.assertEqual(saved_log[-1]["operation_type"], "DELETE_CELL")
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_responsive_toolbar_and_slider_precision_synchronization(self):
+        """Verifies responsive layout updates and brush size control synchronization."""
+        import tempfile
+        import shutil
+        import tifffile
+        from lumen.ui.mask_editor_dialog import MaskEditorDialog
+        
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            img_path = temp_dir / "dummy_responsive.tif"
+            tifffile.imwrite(str(img_path), np.zeros((10, 10), dtype=np.uint16))
+            
+            dialog = MaskEditorDialog(str(img_path), np.zeros((10, 10), dtype=np.uint16))
+            
+            # Verify synchronization between slider and spinbox
+            dialog.size_slider.setValue(25)
+            self.assertEqual(dialog.size_spin.value(), 25)
+            self.assertEqual(dialog.canvas.brush_size, 25)
+            
+            dialog.size_spin.setValue(18)
+            self.assertEqual(dialog.size_slider.value(), 18)
+            self.assertEqual(dialog.canvas.brush_size, 18)
+            
+            # Verify plus/minus clicks
+            dialog.plus_btn.click()
+            self.assertEqual(dialog.size_spin.value(), 19)
+            self.assertEqual(dialog.size_slider.value(), 19)
+            
+            dialog.minus_btn.click()
+            self.assertEqual(dialog.size_spin.value(), 18)
+            self.assertEqual(dialog.size_slider.value(), 18)
+            
+            # Test responsive layout toggle (simulated resize)
+            dialog.resize(800, 600)
+            dialog._update_toolbar_layout()
+            
+            dialog.resize(1400, 900)
+            dialog._update_toolbar_layout()
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_metrics_recomputation_from_scratch(self):
+        """Verifies that update_results_mask fully rebuilds metrics from scratch without patching.
+        Ensures deleted labels disappear, newly merged/added cells are updated correctly,
+        and sequential IDs are not assumed (e.g., cell ID 76 is preserved and mapped).
+        """
+        original_results = {
+            "masks": np.zeros((10, 10), dtype=np.uint16),
+            "cell_count": 5,
+            "cell_metrics": {
+                1: {"area_px": 5, "diameter_px": 2.5, "centroid": (1.0, 1.0)},
+                2: {"area_px": 5, "diameter_px": 2.5, "centroid": (2.0, 2.0)},
+                3: {"area_px": 5, "diameter_px": 2.5, "centroid": (3.0, 3.0)},
+                4: {"area_px": 5, "diameter_px": 2.5, "centroid": (4.0, 4.0)},
+                5: {"area_px": 5, "diameter_px": 2.5, "centroid": (5.0, 5.0)}
+            },
+            "average_diameter_px": 2.5,
+            "mean_cell_area_px": 5.0,
+            "median_cell_area_px": 5.0,
+            "cell_density": 0.05
+        }
+        
+        # New mask: Cell 1 is deleted (not present), Cells 2 and 3 are merged to 2, 
+        # Cell 4 and 5 are merged to 76 (non-sequential, e.g. custom label ID)
+        new_mask = np.zeros((10, 10), dtype=np.uint16)
+        new_mask[0:2, 0:2] = 2  # Cell 2 (area 4)
+        new_mask[4:6, 4:6] = 76 # Cell 76 (area 4)
+        
+        updated = update_results_mask(original_results, new_mask)
+        
+        # Verify that ONLY cell 2 and 76 exist in cell_metrics
+        self.assertEqual(updated["cell_count"], 2)
+        self.assertEqual(list(sorted(updated["cell_metrics"].keys())), [2, 76])
+        
+        # Verify old keys (1, 3, 4, 5) are completely removed (not patched)
+        self.assertNotIn(1, updated["cell_metrics"])
+        self.assertNotIn(3, updated["cell_metrics"])
+        self.assertNotIn(4, updated["cell_metrics"])
+        self.assertNotIn(5, updated["cell_metrics"])
+        
+        # Verify recalculations of area and centroid
+        self.assertEqual(updated["cell_metrics"][2]["area_px"], 4)
+        self.assertEqual(updated["cell_metrics"][76]["area_px"], 4)
+        # Centroid for Cell 2 (indices 0,0; 0,1; 1,0; 1,1) is (0.5, 0.5)
+        self.assertEqual(updated["cell_metrics"][2]["centroid"], (0.5, 0.5))
+        # Centroid for Cell 76 (indices 4,4; 4,5; 5,4; 5,5) is (4.5, 4.5)
+        self.assertEqual(updated["cell_metrics"][76]["centroid"], (4.5, 4.5))
+
+    def test_responsive_toolbar_three_tiers(self):
+        """Verifies that _update_toolbar_layout switches correctly between Wide, Medium, and Narrow states."""
+        import tempfile
+        import shutil
+        import tifffile
+        from lumen.ui.mask_editor_dialog import MaskEditorDialog
+        
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            img_path = temp_dir / "dummy_tiers.tif"
+            tifffile.imwrite(str(img_path), np.zeros((10, 10), dtype=np.uint16))
+            
+            dialog = MaskEditorDialog(str(img_path), np.zeros((10, 10), dtype=np.uint16))
+            
+            # Wide Layout (w >= 1250)
+            dialog.resize(1300, 600)
+            dialog._update_toolbar_layout()
+            self.assertFalse(dialog.sep1.isHidden())
+            self.assertFalse(dialog.sep2.isHidden())
+            self.assertFalse(dialog.sep3.isHidden())
+            self.assertFalse(dialog.sep4.isHidden())
+            
+            # Medium Layout (920 <= w < 1250)
+            dialog.resize(1000, 600)
+            dialog._update_toolbar_layout()
+            self.assertFalse(dialog.sep1.isHidden())
+            self.assertFalse(dialog.sep2.isHidden())
+            self.assertFalse(dialog.sep3.isHidden())
+            self.assertTrue(dialog.sep4.isHidden())
+            
+            # Narrow Layout (w < 920)
+            dialog.resize(700, 600)
+            dialog._update_toolbar_layout()
+            self.assertFalse(dialog.sep1.isHidden())
+            self.assertFalse(dialog.sep2.isHidden())
+            self.assertTrue(dialog.sep3.isHidden())
+            self.assertTrue(dialog.sep4.isHidden())
+        finally:
+            shutil.rmtree(temp_dir)
 
 if __name__ == "__main__":
     unittest.main()

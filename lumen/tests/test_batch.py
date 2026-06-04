@@ -816,13 +816,13 @@ class TestLumenBatchPipeline(unittest.TestCase):
         self.assertEqual(explorer.navigator_list.currentRow(), 0)
         
         # Verify guards during rebuild
-        explorer._is_populating_list = True
+        explorer._explorer_transaction_active = True
         # Under guard: search and selections should early return and do nothing
         explorer._on_search_changed()
         self.assertEqual(explorer.navigator_list.count(), 2) # wasn't cleared/repopulated
         
         # Reset guard
-        explorer._is_populating_list = False
+        explorer._explorer_transaction_active = False
         
         # Set search query to filter out everything
         explorer.search_bar.setText("gamma")
@@ -858,10 +858,12 @@ class TestLumenBatchPipeline(unittest.TestCase):
         self.assertEqual(batch_manager.active_worker, mock_worker)
         
         # Trigger cleanup with a callback
+        loop = QEventLoop()
         callback_called = False
         def test_callback():
             nonlocal callback_called
             callback_called = True
+            loop.quit()
             
         batch_manager._cleanup_active_worker(test_callback)
         
@@ -875,16 +877,57 @@ class TestLumenBatchPipeline(unittest.TestCase):
         import gc
         gc.collect()
         
-        # Process deferred deletion events using QEventLoop
-        from PySide6.QtCore import QEventLoop, QTimer
-        loop = QEventLoop()
-        QTimer.singleShot(0, loop.quit)
+        # Process deferred deletion events using QEventLoop with safety timeout fallback
+        timeout_timer = QTimer()
+        timeout_timer.setSingleShot(True)
+        timeout_timer.timeout.connect(loop.quit)
+        timeout_timer.start(2000)
+        
         loop.exec()
+        timeout_timer.stop()
         
         # Verify that destroyed callback was triggered and fields cleared
         self.assertTrue(callback_called)
         self.assertIsNone(batch_manager._destroying_worker_ref)
         self.assertIsNone(batch_manager._on_cleanup_finished_callback)
+
+    def test_batch_manager_cross_run_isolation(self):
+        """Verifies that consecutive batch runs are completely isolated and do not contaminate each other's lifecycle."""
+        # 1. Run first batch with 2 images
+        params = {"quality_mode": "Fast"}
+        batch_manager.prepare_batch(str(self.test_batch_dir), params)
+        self.assertEqual(len(batch_manager.image_paths), 3)
+        batch_manager.image_paths = batch_manager.image_paths[:2]
+        
+        loop1 = QEventLoop()
+        batch_manager.batch_finished.connect(lambda c, f, r: loop1.quit())
+        
+        batch_manager.start_batch()
+        loop1.exec()
+        
+        # Verify first run succeeded and is finalized
+        self.assertEqual(batch_manager.completed_count, 2)
+        self.assertTrue(batch_manager._batch_ready_for_new_run)
+        
+        # Disconnect old finished connection
+        batch_manager.batch_finished.disconnect()
+        
+        # 2. Start a second batch run immediately with 1 image
+        batch_manager.prepare_batch(str(self.test_batch_dir), params)
+        self.assertEqual(len(batch_manager.image_paths), 3)
+        batch_manager.image_paths = batch_manager.image_paths[:1]
+        
+        loop2 = QEventLoop()
+        batch_manager.batch_finished.connect(lambda c, f, r: loop2.quit())
+        
+        # Assert start is allowed and start the batch
+        self.assertTrue(batch_manager._batch_ready_for_new_run)
+        batch_manager.start_batch()
+        loop2.exec()
+        
+        # Verify second run succeeded and is finalized
+        self.assertEqual(batch_manager.completed_count, 1)
+        self.assertTrue(batch_manager._batch_ready_for_new_run)
 
 
 if __name__ == "__main__":

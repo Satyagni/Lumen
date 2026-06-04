@@ -44,6 +44,7 @@ class BatchProcessingManager(QObject):
         self._on_cleanup_finished_callback = None
         self._is_cancelled = False
         self._is_paused_requested = False
+        self._batch_ready_for_new_run = True
         
         self.start_time = 0.0
         self.image_start_time = 0.0
@@ -68,6 +69,12 @@ class BatchProcessingManager(QObject):
             logger.warning("BatchManager: Cannot prepare batch while running.")
             return 0
 
+        if not getattr(self, "_batch_ready_for_new_run", True):
+            logger.warning("BatchManager: Cannot prepare batch because previous run is not fully finalized.")
+            state.batch_status = "Warning: Previous batch run is still finalizing. Please wait."
+            return 0
+
+        self._harden_lifecycle_reset()
         self.lifecycle_state = "IDLE"
         self.image_paths = []
         self.parameters = parameters
@@ -137,13 +144,21 @@ class BatchProcessingManager(QObject):
 
     def start_batch(self):
         """Starts batch processing sequential loop."""
-        if self.lifecycle_state in ("RUNNING", "PAUSED", "COMPLETED"):
-            logger.warning("BatchManager: Start requested but batch is already active or completed (state: %s).", self.lifecycle_state)
+        if self.lifecycle_state in ("RUNNING", "PAUSED"):
+            logger.warning("BatchManager: Start requested but batch is already active (state: %s).", self.lifecycle_state)
+            return
+
+        if not getattr(self, "_batch_ready_for_new_run", True):
+            logger.warning("BatchManager: Cannot start batch because previous run is not fully finalized.")
+            state.batch_status = "Error: Cannot start batch. Previous run is still finalizing."
             return
 
         if self.active_worker and self.active_worker.isRunning():
             logger.warning("BatchManager: Active worker is already running. Blocked execution.")
             return
+
+        self._batch_ready_for_new_run = False
+        logger.info("BatchManager: Starting isolated batch run.")
 
         # Resolve backend preference exactly once at batch start
         segmentation_method = self.parameters.get("segmentation_method", "AI Segmentation")
@@ -222,6 +237,8 @@ class BatchProcessingManager(QObject):
         self._write_run_manifest()
         self.batch_cancelled.emit()
         self._cleanup_active_worker()
+        self._batch_ready_for_new_run = True
+        logger.info("BatchManager: Previous batch fully finalized. Ready for new batch.")
 
     def analyze_next_image(self):
         if self._is_cancelled:
@@ -432,7 +449,7 @@ class BatchProcessingManager(QObject):
         callback = getattr(self, "_on_cleanup_finished_callback", None)
         if callback:
             self._on_cleanup_finished_callback = None
-            callback()
+            QTimer.singleShot(0, callback)
 
     def _on_image_failed(self, error_msg: str):
         image_path = self.image_paths[self.current_idx]
@@ -661,6 +678,8 @@ class BatchProcessingManager(QObject):
         
         logger.info("BatchManager: Batch completed. Total elapsed: %.2f minutes", self.get_elapsed_seconds() / 60.0)
         self._cleanup_active_worker()
+        self._batch_ready_for_new_run = True
+        logger.info("BatchManager: Previous batch fully finalized. Ready for new batch.")
         self.batch_finished.emit(self.completed_count, self.failed_count, self.output_dir)
 
     def pause_batch(self):
@@ -767,9 +786,56 @@ class BatchProcessingManager(QObject):
             if callback:
                 callback()
 
+    def _harden_lifecycle_reset(self):
+        logger.info("BatchManager: Performing lifecycle sanitation pass.")
+        # 1. Clean up active worker if exists
+        if self.active_worker:
+            logger.info("BatchManager: Active worker exists during reset, cleaning up.")
+            self._cleanup_active_worker()
+            
+        # 2. Wait for any destroying worker to be fully joined (thread finished)
+        destroying_worker = getattr(self, "_destroying_worker_ref", None)
+        if destroying_worker is not None and destroying_worker() is not None:
+            worker = destroying_worker()
+            logger.info("BatchManager: Lingering destroying worker found, waiting for join.")
+            try:
+                if worker.isRunning():
+                    worker.cancel()
+                    worker.quit()
+                    worker.wait(2000)
+            except Exception as e:
+                logger.error("BatchManager: Error joining destroying worker: %s", e)
+
+        # 3. Use local event-loop flush only as a timeout/fallback safety path if destruction stalls
+        destroying_worker = getattr(self, "_destroying_worker_ref", None)
+        if destroying_worker is not None and destroying_worker() is not None:
+            worker = destroying_worker()
+            logger.info("BatchManager: Destructor stalled. Flushing event loop for deferred deletions...")
+            from PySide6.QtCore import QEventLoop
+            loop = QEventLoop()
+            try:
+                worker.destroyed.connect(loop.quit)
+            except Exception:
+                pass
+            
+            timeout_timer = QTimer()
+            timeout_timer.setSingleShot(True)
+            timeout_timer.timeout.connect(loop.quit)
+            timeout_timer.start(500)  # 500ms safety timeout
+            loop.exec()
+            timeout_timer.stop()
+                
+        self._destroying_worker_ref = None
+        self._on_cleanup_finished_callback = None
+        self._is_cancelled = False
+        self._is_paused_requested = False
+        self._batch_ready_for_new_run = True
+        logger.info("BatchManager: Lifecycle clean. Ready for new batch.")
+
     def reset_batch(self):
         """Resets the batch manager singleton to fresh idle state."""
         logger.info("BatchManager: Resetting batch state.")
+        self._harden_lifecycle_reset()
         self.lifecycle_state = "IDLE"
         self._is_cancelled = True
         self.image_paths = []
@@ -781,7 +847,6 @@ class BatchProcessingManager(QObject):
         self.resolved_backend = ""
         self.elapsed_time_accumulated = 0.0
         self.run_start_time = 0.0
-        self._cleanup_active_worker()
         state.is_batch_active = False
 
 # Global singleton instance of BatchProcessingManager

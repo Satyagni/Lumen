@@ -138,7 +138,9 @@ class BatchResultsExplorerPage(QWidget):
         self.batch_dir = None
         self.records = []
         self.manifest_data = {}
-        self._is_populating_list = False
+        self._explorer_transaction_active = False
+        self._pending_search_repopulate = False
+        self._pending_session_save = False
 
         # Debounce timer for search queries
         from PySide6.QtCore import QTimer
@@ -604,7 +606,8 @@ class BatchResultsExplorerPage(QWidget):
         self._loaded_batch_dir = results_dir
 
     def _save_to_session(self):
-        if getattr(self, "_is_populating_list", False):
+        if getattr(self, "_explorer_transaction_active", False):
+            self._pending_session_save = True
             return
         results_dir = state.batch_results_dir
         if not results_dir:
@@ -748,43 +751,51 @@ class BatchResultsExplorerPage(QWidget):
             else:
                 if self.navigator_list.count() > 0:
                     self.navigator_list.setCurrentRow(0)
+                else:
+                    self._on_selection_changed(None, None)
         else:
             if self.navigator_list.count() > 0:
                 self.navigator_list.setCurrentRow(0)
+            else:
+                self._on_selection_changed(None, None)
 
     def _on_search_text_changed(self, text: str):
-        if getattr(self, "_is_populating_list", False):
+        if getattr(self, "_explorer_transaction_active", False):
+            self._pending_search_repopulate = True
             return
         self.search_timer.start()
 
     def _on_search_changed(self):
-        if getattr(self, "_is_populating_list", False):
+        if getattr(self, "_explorer_transaction_active", False):
+            self._pending_search_repopulate = True
             return
         self._populate_list()
         self._save_to_session()
 
     def _on_sort_changed(self, text: str):
-        if getattr(self, "_is_populating_list", False):
+        if getattr(self, "_explorer_transaction_active", False):
             return
         self._populate_list()
         self._save_to_session()
 
     def _on_show_original_changed(self, checked: bool):
-        if getattr(self, "_is_populating_list", False):
+        if getattr(self, "_explorer_transaction_active", False):
             return
         self.image_viewer.set_show_original(checked)
         self._save_to_session()
 
     def _on_show_overlay_changed(self, checked: bool):
-        if getattr(self, "_is_populating_list", False):
+        if getattr(self, "_explorer_transaction_active", False):
             return
         self.image_viewer.set_show_overlay(checked)
         self._save_to_session()
 
     def _populate_list(self, select_default=True):
-        if getattr(self, "_is_populating_list", False):
+        if getattr(self, "_explorer_transaction_active", False):
             return
-        self._is_populating_list = True
+        self._explorer_transaction_active = True
+        self._pending_search_repopulate = False
+        self._pending_session_save = False
         
         # 1. Save current selection before clearing
         selected_name = None
@@ -872,14 +883,14 @@ class BatchResultsExplorerPage(QWidget):
                 if selected_name and filename == selected_name:
                     target_item = item
         finally:
+            self._explorer_transaction_active = False
             if sel_blocker:
                 sel_blocker.unblock()
             blocker.unblock()
-            self._is_populating_list = False
 
         # 2. Restore selection or select default
         if select_default:
-            if target_item:
+            if target_item and self.navigator_list.row(target_item) >= 0:
                 self.navigator_list.setCurrentItem(target_item)
             elif self.navigator_list.count() > 0:
                 self.navigator_list.setCurrentRow(0)
@@ -887,8 +898,16 @@ class BatchResultsExplorerPage(QWidget):
                 # Clear viewer and metadata explicitly if no items match
                 self._on_selection_changed(None, None)
 
+        # 3. Process deferred tasks
+        if getattr(self, "_pending_search_repopulate", False):
+            self._pending_search_repopulate = False
+            self.search_timer.start()
+        elif getattr(self, "_pending_session_save", False):
+            self._pending_session_save = False
+            self._save_to_session()
+
     def _on_selection_changed(self, current_item: QListWidgetItem, previous_item: QListWidgetItem):
-        if getattr(self, "_is_populating_list", False):
+        if getattr(self, "_explorer_transaction_active", False):
             return
         if not current_item:
             self._clear_metadata_panel()
@@ -909,7 +928,7 @@ class BatchResultsExplorerPage(QWidget):
         self._save_to_session()
 
     def _load_record_details(self, record: dict):
-        if getattr(self, "_is_populating_list", False):
+        if getattr(self, "_explorer_transaction_active", False):
             return
         self._clear_metadata_panel()
         self.image_viewer.clear()
@@ -1066,14 +1085,14 @@ class BatchResultsExplorerPage(QWidget):
         # Guard: meta_grid may be transiently None during _reset_explorer_state()
         if self.meta_grid is None:
             return
-        # Delete widgets
-        for i in reversed(range(self.meta_grid.count())):
-            item = self.meta_grid.itemAt(i)
-            if item is None:
-                continue
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        # Delete widgets and remove from layout immediately to prevent double addition overlaps
+        while self.meta_grid.count() > 0:
+            item = self.meta_grid.takeAt(0)
+            if item is not None:
+                widget = item.widget()
+                if widget is not None:
+                    widget.setParent(None)
+                    widget.deleteLater()
 
     def _on_prev_clicked(self):
         curr_row = self.navigator_list.currentRow()

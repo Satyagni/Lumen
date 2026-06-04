@@ -551,6 +551,39 @@ class MaskEditorCanvas(QGraphicsView):
             return
         super().mouseDoubleClickEvent(event)
 
+    def clear(self):
+        """Explicitly clear and clean up graphics items from the scene to prevent C++ level crashes."""
+        logger.info("MaskEditorCanvas: Cleaning up graphics items.")
+        self.working_mask = None
+        self.color_lut = None
+        self.selected_labels.clear()
+        self.selected_label_id = None
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        
+        # Clear items from scene
+        if self.selection_item:
+            try:
+                self.scene.removeItem(self.selection_item)
+            except Exception:
+                pass
+            self.selection_item = None
+            
+        try:
+            self.scene.removeItem(self.pixmap_item)
+        except Exception:
+            pass
+        try:
+            self.scene.removeItem(self.mask_item)
+        except Exception:
+            pass
+        try:
+            self.scene.removeItem(self.brush_cursor_item)
+        except Exception:
+            pass
+            
+        self.scene.clear()
+
 
 class MaskEditorDialog(QDialog):
     """Scientific manual mask correction dialog containing brushes, sliders, and canvas views."""
@@ -560,6 +593,7 @@ class MaskEditorDialog(QDialog):
         self.setWindowTitle("Manual Mask Refinement")
         self.setMinimumSize(1000, 700)
         self.setObjectName("MaskEditorDialog")
+        self.edited_mask = None
         
         # Maximize and minimize flags
         self.setWindowFlags(self.windowFlags() | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
@@ -819,7 +853,10 @@ class MaskEditorDialog(QDialog):
             self.merge_btn.setEnabled(True)
 
     def has_unsaved_changes(self) -> bool:
-        return self.canvas.working_mask is not None and not np.array_equal(self.canvas.working_mask, self.original_mask)
+        mask_to_check = getattr(self, "edited_mask", None)
+        if mask_to_check is None and hasattr(self, "canvas") and self.canvas is not None:
+            mask_to_check = self.canvas.working_mask
+        return mask_to_check is not None and not np.array_equal(mask_to_check, self.original_mask)
 
     def closeEvent(self, event):
         if self.has_unsaved_changes():
@@ -847,6 +884,10 @@ class MaskEditorDialog(QDialog):
         else:
             event.accept()
 
+    def accept(self):
+        self.edited_mask = self.canvas.working_mask
+        super().accept()
+
     def reject(self):
         if self.has_unsaved_changes():
             from PySide6.QtWidgets import QMessageBox
@@ -873,6 +914,11 @@ class MaskEditorDialog(QDialog):
                 pass
         else:
             super().reject()
+
+    def done(self, r):
+        super().done(r)
+        if hasattr(self, "canvas") and self.canvas:
+            self.canvas.clear()
 
     def _sync_theme(self):
         theme = theme_service.current_theme

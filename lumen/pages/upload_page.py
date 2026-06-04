@@ -7,7 +7,7 @@ from PySide6.QtGui import QPixmap, QCursor, QColor
 from lumen.core.logger import logger
 from lumen.core.constants import ALLOWED_EXTENSIONS
 from lumen.workflows.state import state
-from lumen.processing.image_manager import image_manager
+from lumen.processing.image_manager import image_manager, ImageManager
 from lumen.core.services.navigation_service import navigation_service
 from lumen.core.services.theme_service import theme_service
 from lumen.processing.batch_manager import batch_manager
@@ -301,6 +301,8 @@ class UploadPage(QWidget):
         self.rec_cards = []
         self.active_tab = "single"  # "single" or "batch"
         self.selected_batch_dir = ""
+        self.local_image_manager = ImageManager()
+        self.staged_workflow_id = None
         
         self._setup_ui()
         self._init_connections()
@@ -651,9 +653,7 @@ class UploadPage(QWidget):
         self.reset_btn.clicked.connect(self._on_reset_clicked)
         self.proceed_btn.clicked.connect(self._on_proceed_clicked)
         
-        state.image_loaded.connect(self._on_state_image_loaded)
         state.theme_changed.connect(self._sync_theme)
-        state.workflow_selected.connect(self._on_state_workflow_selected)
 
         # Batch connections
         self.folder_drop_zone.folder_dropped.connect(self._on_folder_selected)
@@ -698,14 +698,15 @@ class UploadPage(QWidget):
         self._sync_theme()
 
     def _on_file_selected(self, file_path: str):
-        success, msg = image_manager.load_image(file_path)
+        success, msg = self.local_image_manager.load_image(file_path, set_state=False)
         if success:
+            self.staged_image_path = file_path
             self._update_ui_with_image()
         else:
             logger.error("UploadPage: Load failed: %s", msg)
 
     def _update_ui_with_image(self):
-        meta = image_manager.get_metadata()
+        meta = self.local_image_manager.get_metadata()
         if not meta:
             return
 
@@ -715,7 +716,7 @@ class UploadPage(QWidget):
         self.type_val.setText(meta["format"])
         self.fmt_val.setText(meta["mode"].upper())
 
-        pixmap = image_manager.get_thumbnail(140, 140)
+        pixmap = self.local_image_manager.get_thumbnail(140, 140)
         if pixmap:
             self.thumb_label.setPixmap(pixmap)
             self.thumb_label.setText("")
@@ -753,13 +754,15 @@ class UploadPage(QWidget):
         for card in self.rec_cards:
             card.set_selected(card.workflow_id == workflow_id)
         
-        state.current_workflow = workflow_id
+        self.staged_workflow_id = workflow_id
         
         self.proceed_btn.setEnabled(True)
         self.proceed_btn.setCursor(QCursor(Qt.PointingHandCursor))
 
     def _on_reset_clicked(self):
-        state.reset_session()
+        self.staged_image_path = None
+        self.staged_workflow_id = None
+        self.local_image_manager.clear_cache()
         self._show_input_state()
 
     def _show_input_state(self):
@@ -919,8 +922,10 @@ class UploadPage(QWidget):
     @Slot(str)
     def _on_state_image_loaded(self, path: str):
         if path:
+            self.staged_image_path = path
             self._update_ui_with_image()
         else:
+            self.staged_image_path = None
             self._show_input_state()
 
     @Slot(str)
@@ -1077,4 +1082,8 @@ class UploadPage(QWidget):
             card.update_appearance()
 
     def _on_proceed_clicked(self):
+        if hasattr(self, "staged_image_path") and self.staged_image_path:
+            state.current_image_path = self.staged_image_path
+        if hasattr(self, "staged_workflow_id") and self.staged_workflow_id:
+            state.current_workflow = self.staged_workflow_id
         navigation_service.navigate_to("analysis")

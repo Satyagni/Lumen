@@ -170,11 +170,19 @@ class TestManualSegmentationMVP(unittest.TestCase):
         self.assertEqual(session.origin_type, "single")
         self.assertEqual(page.save_analysis_btn.text(), "💾 Save Analysis")
         
-        # Try to modify session or start again, checking immutability
-        state.workspace_manager.start_analysis_session(img_path, origin_type="batch", batch_origin_context="C:/some/batch")
-        session2 = state.workspace_manager.get_analysis_session(img_path)
-        self.assertEqual(session2.origin_type, "single") # Stays single!
-        self.assertIsNone(session2.batch_origin_context)  # Stays None!
+        # Verify single and batch sessions for the same image path can coexist safely
+        sess_single = state.workspace_manager.get_analysis_session(img_path, "single")
+        self.assertEqual(sess_single.origin_type, "single")
+        self.assertIsNone(sess_single.batch_origin_context)
+
+        sess_batch = state.workspace_manager.start_analysis_session(img_path, origin_type="batch", batch_origin_context="C:/some/batch")
+        self.assertEqual(sess_batch.origin_type, "batch")
+        self.assertEqual(sess_batch.batch_origin_context, "C:/some/batch")
+
+        # Verify original single session is untouched
+        sess_single_after = state.workspace_manager.get_analysis_session(img_path, "single")
+        self.assertEqual(sess_single_after.origin_type, "single")
+        self.assertIsNone(sess_single_after.batch_origin_context)
         
         # Scenario 2: Start new session with batch origin
         img_path_b = "C:/test_images/study_B.tif"
@@ -590,6 +598,373 @@ class TestManualSegmentationMVP(unittest.TestCase):
                 
         finally:
             shutil.rmtree(temp_dir)
+
+    def test_batch_pdf_report_regeneration(self):
+        """Verifies that saving a batch-origin image regenerates the image-level PDF report
+        reflecting the latest committed edited results and overlay visualization.
+        """
+        import os
+        import tempfile
+        import csv
+        import json
+        import shutil
+        import time
+        from pathlib import Path
+        from unittest.mock import MagicMock
+        from PySide6.QtWidgets import QDialog
+        from lumen.workflows.state import state
+        from lumen.pages.analysis_page import AnalysisPage
+        
+        state.workspace_manager.reset_analysis_session()
+        state.workspace_manager.reset_batch_session()
+        state.reset_analysis_session()
+        state.is_dirty = False
+        
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            # 1. Setup a dummy batch results folder
+            batch_dir = temp_dir / "batch_results"
+            os.makedirs(batch_dir, exist_ok=True)
+            
+            raw_img_path = temp_dir / "sample_001.tif"
+            import tifffile
+            tifffile.imwrite(str(raw_img_path), np.zeros((10, 10), dtype=np.uint16))
+            
+            img_results_dir = batch_dir / "sample_001.tif"
+            os.makedirs(img_results_dir, exist_ok=True)
+            
+            # Stale / old PDF report on disk
+            pdf_path = img_results_dir / "sample_001.tif_report.pdf"
+            with open(pdf_path, "w", encoding="utf-8") as f:
+                f.write("stale pdf data placeholder")
+                
+            # Raw labels (10 cells)
+            labels_mask = np.zeros((10, 10), dtype=np.uint16)
+            for i in range(1, 11):
+                labels_mask[0, i-1] = i
+            tifffile.imwrite(str(img_results_dir / "sample_001.tif_labels_raw.tif"), labels_mask)
+            
+            # Summary CSV
+            summary_csv = batch_dir / "batch_summary.csv"
+            with open(summary_csv, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["image_name", "status", "cell_count", "mean_area_px", "workflow", "segmentation_mode"])
+                writer.writerow(["sample_001.tif", "SUCCESS", "10", "1.0", "cell_counting", "Balanced"])
+                
+            # Stage the session with batch origin context
+            state.current_image_path = str(raw_img_path)
+            session = state.workspace_manager.start_analysis_session(
+                str(raw_img_path),
+                origin_type="batch",
+                batch_origin_context=str(batch_dir)
+            )
+            
+            state.current_workflow = "cell_counting"
+            state.quality_mode = "Balanced"
+            
+            # Setup initial results
+            original_results = {
+                "masks": labels_mask,
+                "cell_count": 10,
+                "cell_metrics": {i: {"area_px": 1, "diameter_px": 1.0, "centroid": (0.0, float(i-1))} for i in range(1, 11)},
+                "mean_cell_area_px": 1.0,
+                "median_cell_area_px": 1.0,
+                "average_diameter_px": 1.0,
+                "cell_density": 0.1
+            }
+            state.analysis_results = original_results
+            
+            session.analysis_results = original_results
+            session.current_workflow = state.current_workflow
+            session.quality_mode = state.quality_mode
+            session.segmentation_method = state.segmentation_method
+            
+            page = AnalysisPage()
+            
+            # Create a mock edited mask (only 1 cell, label 1)
+            edited_mask = np.zeros((10, 10), dtype=np.uint16)
+            edited_mask[0:2, 0:2] = 1
+            
+            import lumen.ui.mask_editor_dialog as med_mod
+            original_dialog_class = med_mod.MaskEditorDialog
+            
+            mock_editor = MagicMock()
+            mock_editor.exec.return_value = QDialog.Accepted
+            mock_editor.canvas.working_mask = edited_mask
+            mock_editor.canvas.selected_label_id = None
+            mock_editor.has_unsaved_changes.return_value = True
+            
+            med_mod.MaskEditorDialog = MagicMock(return_value=mock_editor)
+            
+            try:
+                # 2. Modify masks in editor -> Apply changes (draft stage)
+                page._on_edit_masks_clicked()
+                self.assertTrue(state.is_dirty)
+                
+                # Check stale PDF is still the old placeholder
+                with open(pdf_path, "r", encoding="utf-8") as f:
+                    self.assertEqual(f.read(), "stale pdf data placeholder")
+                    
+                # 3. Save to Batch (Commit stage)
+                saved = page.save_analysis()
+                self.assertTrue(saved)
+                self.assertFalse(state.is_dirty)
+                
+                # Verify PDF report is regenerated (the file contents should change and not be the placeholder anymore)
+                self.assertTrue(pdf_path.exists())
+                # File size should be much larger than the placeholder string because it's a real PDF now
+                self.assertGreater(pdf_path.stat().st_size, 100)
+                
+                # Confirm we don't have the stale placeholder content
+                with open(pdf_path, "rb") as f:
+                    pdf_bytes = f.read(10)
+                    # Real PDF starts with %PDF header
+                    self.assertTrue(pdf_bytes.startswith(b"%PDF"))
+                    
+            finally:
+                med_mod.MaskEditorDialog = original_dialog_class
+                
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_single_upload_staging(self):
+        """Verifies that single image upload stages the image in UploadPage
+        without immediately propagating to state.current_image_path,
+        and propagates it only when Proceed to Analysis is clicked.
+        """
+        import os
+        import tempfile
+        import shutil
+        from pathlib import Path
+        from lumen.workflows.state import state
+        from lumen.pages.upload_page import UploadPage
+        from lumen.processing.image_manager import image_manager
+        
+        state.reset_session()
+        self.assertIsNone(state.current_image_path)
+        
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            raw_img_path = temp_dir / "sample_stage.png"
+            from PIL import Image
+            img = Image.new("L", (10, 10))
+            img.save(str(raw_img_path))
+            
+            upload_page = UploadPage()
+            upload_page.drop_zone.file_dropped.emit(str(raw_img_path))
+            
+            # Verify the image is staged inside the page
+            self.assertEqual(upload_page.staged_image_path, str(raw_img_path))
+            
+            # Verify global state.current_image_path was NOT changed
+            self.assertIsNone(state.current_image_path)
+            
+            # Verify Proceed button is enabled after recommended workflow is selected
+            self.assertTrue(upload_page.proceed_btn.isEnabled())
+            
+            # Simulate clicking proceed
+            upload_page._on_proceed_clicked()
+            
+            # Now it should be set
+            self.assertEqual(state.current_image_path, str(raw_img_path))
+            
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_draft_commit_revert_on_navigation(self):
+        """Verifies that if user navigates away while dirty and chooses Discard,
+        the in-memory analysis results revert to the last committed state.
+        """
+        from lumen.workflows.state import state
+        from lumen.pages.analysis_page import AnalysisPage
+        from PySide6.QtWidgets import QDialog, QMessageBox
+        from unittest.mock import MagicMock
+        
+        state.workspace_manager.reset_analysis_session()
+        state.reset_analysis_session()
+        
+        img_path = "dummy_path.png"
+        state.current_image_path = img_path
+        session = state.workspace_manager.start_analysis_session(img_path)
+        
+        original_results = {"masks": np.zeros((10, 10)), "cell_count": 5}
+        state.analysis_results = original_results
+        session.analysis_results = original_results
+        session.committed_results = original_results
+        
+        page = AnalysisPage()
+        
+        # Modify masks to trigger dirty state
+        edited_mask = np.zeros((10, 10))
+        edited_mask[0, 0] = 1
+        
+        import lumen.ui.mask_editor_dialog as med_mod
+        original_dialog = med_mod.MaskEditorDialog
+        
+        mock_editor = MagicMock()
+        mock_editor.exec.return_value = QDialog.Accepted
+        mock_editor.canvas.working_mask = edited_mask
+        mock_editor.canvas.selected_label_id = None
+        mock_editor.has_unsaved_changes.return_value = True
+        
+        med_mod.MaskEditorDialog = MagicMock(return_value=mock_editor)
+        
+        original_msgbox = QMessageBox.exec
+        QMessageBox.exec = MagicMock()
+        
+        try:
+            page._on_edit_masks_clicked()
+            self.assertTrue(state.is_dirty)
+            self.assertEqual(state.analysis_results["cell_count"], 1)
+            
+            # Set active page to analysis
+            state.current_page = "analysis"
+            # Navigate to results (triggers navigation_service.navigate_to which automatically reverts)
+            from lumen.core.services.navigation_service import navigation_service
+            success = navigation_service.navigate_to("results")
+            self.assertTrue(success)
+            self.assertFalse(state.is_dirty)
+            self.assertEqual(state.analysis_results["cell_count"], 5)
+            
+        finally:
+            med_mod.MaskEditorDialog = original_dialog
+            QMessageBox.exec = original_msgbox
+
+    def test_reset_changes_functionality(self):
+        """Verifies that Reset Changes button is enabled when dirty,
+        and clicking it discards edits, reverts analysis_results to
+        committed_results, and clears the dirty flag.
+        """
+        from lumen.workflows.state import state
+        from lumen.pages.analysis_page import AnalysisPage
+        from PySide6.QtWidgets import QDialog
+        from unittest.mock import MagicMock
+        
+        state.workspace_manager.reset_analysis_session()
+        state.reset_analysis_session()
+        
+        img_path = "dummy_reset.png"
+        state.current_image_path = img_path
+        session = state.workspace_manager.start_analysis_session(img_path)
+        
+        original_results = {"masks": np.zeros((10, 10)), "cell_count": 8}
+        state.analysis_results = original_results
+        session.analysis_results = original_results
+        session.committed_results = original_results
+        
+        page = AnalysisPage()
+        self.assertFalse(page.reset_changes_btn.isEnabled())
+        
+        # Modify masks
+        edited_mask = np.zeros((10, 10))
+        edited_mask[0, 0] = 2
+        
+        import lumen.ui.mask_editor_dialog as med_mod
+        original_dialog = med_mod.MaskEditorDialog
+        
+        mock_editor = MagicMock()
+        mock_editor.exec.return_value = QDialog.Accepted
+        mock_editor.canvas.working_mask = edited_mask
+        mock_editor.canvas.selected_label_id = None
+        mock_editor.has_unsaved_changes.return_value = True
+        
+        med_mod.MaskEditorDialog = MagicMock(return_value=mock_editor)
+        
+        try:
+            page._on_edit_masks_clicked()
+            self.assertTrue(state.is_dirty)
+            self.assertTrue(page.reset_changes_btn.isEnabled())
+            
+            # Click reset changes
+            page._on_reset_changes_clicked()
+            
+            self.assertFalse(state.is_dirty)
+            self.assertFalse(page.reset_changes_btn.isEnabled())
+            self.assertEqual(state.analysis_results["cell_count"], 8)
+            
+        finally:
+            med_mod.MaskEditorDialog = original_dialog
+            
+    def test_has_unsaved_changes_after_accept_and_done(self):
+        """Verifies that has_unsaved_changes remains True even after done() clears the canvas."""
+        from lumen.ui.mask_editor_dialog import MaskEditorDialog
+        from PIL import Image
+        import tempfile
+        import shutil
+        
+        # Setup dummy mask
+        original_mask = np.zeros((10, 10), dtype=np.uint16)
+        original_mask[0:2, 0:2] = 1
+        
+        # Create a mock raw image file on disk first
+        temp_dir = tempfile.mkdtemp()
+        img_path = Path(temp_dir) / "temp_edit_test_unsaved.png"
+        img = Image.new("L", (20, 20))
+        img.save(str(img_path))
+        
+        try:
+            dialog = MaskEditorDialog(str(img_path), original_mask)
+            
+            # Initially no changes
+            self.assertFalse(dialog.has_unsaved_changes())
+            
+            # Mutate mask in canvas
+            dialog.canvas.working_mask[2, 2] = 5
+            
+            # Now has unsaved changes
+            self.assertTrue(dialog.has_unsaved_changes())
+            
+            # Accept dialog (caches self.edited_mask)
+            dialog.accept()
+            
+            # done() clears the canvas, mimicking dialog close
+            dialog.done(1)
+            
+            # Verify that canvas is cleared
+            self.assertIsNone(dialog.canvas.working_mask)
+            
+            # BUT because of our fix, has_unsaved_changes() must STILL return True (evaluating against edited_mask)
+            self.assertTrue(dialog.has_unsaved_changes())
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_selection_outline_cleanup(self):
+        """Verifies that highlight outline contours are cleared from the viewer
+        on transitions, image sync, and reset changes.
+        """
+        from lumen.workflows.state import state
+        from lumen.pages.analysis_page import AnalysisPage
+        
+        state.workspace_manager.reset_analysis_session()
+        state.reset_analysis_session()
+        
+        img_path = "dummy_selection.png"
+        state.current_image_path = img_path
+        session = state.workspace_manager.start_analysis_session(img_path)
+        
+        original_results = {"masks": np.ones((10, 10)), "cell_count": 1}
+        state.analysis_results = original_results
+        session.analysis_results = original_results
+        session.committed_results = original_results
+        
+        page = AnalysisPage()
+        
+        # Highlight cell
+        page.image_viewer.set_analysis_results(original_results)
+        page.image_viewer._highlight_cell(1, np.ones((10, 10)))
+        self.assertIsNotNone(page.image_viewer.highlight_item)
+        
+        # Triggering clear_selection should clear it
+        page.clear_selection()
+        self.assertIsNone(page.image_viewer.highlight_item)
+        
+        # Redraw
+        page.image_viewer._highlight_cell(1, np.ones((10, 10)))
+        self.assertIsNotNone(page.image_viewer.highlight_item)
+        
+        # Syncing state (like changing image or tab) should clear selection
+        page._sync_state()
+        self.assertIsNone(page.image_viewer.highlight_item)
 
 if __name__ == "__main__":
     unittest.main()

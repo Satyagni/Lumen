@@ -1021,6 +1021,7 @@ class BatchResultsExplorerPage(QWidget):
         session.quality_mode = state.quality_mode
         session.segmentation_method = state.segmentation_method
         session.analysis_results = state.analysis_results
+        session.committed_results = results
         session.mask_opacity = state.mask_opacity
         session.show_original_image = state.show_original_image
         session.show_segmentation_overlay = state.show_segmentation_overlay

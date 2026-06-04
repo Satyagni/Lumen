@@ -1,4 +1,5 @@
 import sys
+import faulthandler
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 from lumen.ui.main_window import MainWindow
@@ -7,6 +8,7 @@ from lumen.core.services.theme_service import theme_service
 
 def start_app():
     """Initializes the QApplication loop and renders the MainWindow shell."""
+    faulthandler.enable()
     logger.info("Initializing QApplication context.")
     
     # Configure High DPI scaling defaults for crisp rendering on high-res displays

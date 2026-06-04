@@ -10,6 +10,7 @@ class AnalysisSession:
         self.batch_origin_context = batch_origin_context
         self.dirty = False
         self.analysis_results = None
+        self.committed_results = None
         self.quality_mode = "Balanced"
         self.mask_opacity = 40
         self.show_original_image = True
@@ -37,9 +38,10 @@ class WorkspaceManager(QObject):
     
     def __init__(self):
         super().__init__()
-        self._analysis_sessions = {}  # dict of image_path -> AnalysisSession
+        self._analysis_sessions = {}  # dict of (image_path, origin_type) -> AnalysisSession
         self._batch_sessions = {}     # dict of batch_results_dir -> BatchResultSession
         self._active_analysis_path = None
+        self._active_analysis_origin = None
         self._active_batch_dir = None
 
     def _normalize_path(self, path: Optional[str]) -> Optional[str]:
@@ -47,31 +49,59 @@ class WorkspaceManager(QObject):
             return None
         return path.replace('\\', '/')
 
-    def get_analysis_session(self, image_path: str) -> Optional[AnalysisSession]:
-        """Gets the analysis session for the given image path."""
+    def get_analysis_session(self, image_path: str, origin_type: Optional[str] = None) -> Optional[AnalysisSession]:
+        """Gets the analysis session for the given image path and origin type."""
         norm_path = self._normalize_path(image_path)
-        return self._analysis_sessions.get(norm_path)
+        if not norm_path:
+            return None
+        if origin_type is None:
+            if norm_path == self._active_analysis_path and self._active_analysis_origin is not None:
+                origin_type = self._active_analysis_origin
+            else:
+                for (p, o), sess in self._analysis_sessions.items():
+                    if p == norm_path:
+                        origin_type = o
+                        break
+                if origin_type is None:
+                    origin_type = "single"
+        session = self._analysis_sessions.get((norm_path, origin_type))
+        if session:
+            self._active_analysis_path = norm_path
+            self._active_analysis_origin = origin_type
+        return session
 
     def start_analysis_session(self, image_path: str, origin_type: str = "single", batch_origin_context: Optional[str] = None) -> AnalysisSession:
-        """Gets or starts a session for the given image path."""
+        """Gets or starts a session for the given image path and origin type."""
         norm_path = self._normalize_path(image_path)
-        if norm_path not in self._analysis_sessions:
-            self._analysis_sessions[norm_path] = AnalysisSession(image_path, origin_type, batch_origin_context)
+        key = (norm_path, origin_type)
+        if key not in self._analysis_sessions:
+            self._analysis_sessions[key] = AnalysisSession(image_path, origin_type, batch_origin_context)
             logger.info("WorkspaceManager: Started fresh AnalysisSession for %s with origin %s", norm_path, origin_type)
         self._active_analysis_path = norm_path
-        return self._analysis_sessions[norm_path]
+        self._active_analysis_origin = origin_type
+        return self._analysis_sessions[key]
 
-    def reset_analysis_session(self, image_path: str = None):
+    def reset_analysis_session(self, image_path: str = None, origin_type: Optional[str] = None):
         """Clears the specified analysis session, or all if none provided."""
         if image_path:
             norm_path = self._normalize_path(image_path)
-            self._analysis_sessions.pop(norm_path, None)
-            if self._active_analysis_path == norm_path:
-                self._active_analysis_path = None
+            if origin_type is not None:
+                self._analysis_sessions.pop((norm_path, origin_type), None)
+                if self._active_analysis_path == norm_path and self._active_analysis_origin == origin_type:
+                    self._active_analysis_path = None
+                    self._active_analysis_origin = None
+            else:
+                keys_to_remove = [k for k in self._analysis_sessions.keys() if k[0] == norm_path]
+                for k in keys_to_remove:
+                    self._analysis_sessions.pop(k, None)
+                if self._active_analysis_path == norm_path:
+                    self._active_analysis_path = None
+                    self._active_analysis_origin = None
             logger.info("WorkspaceManager: Cleared AnalysisSession for %s", norm_path)
         else:
             self._analysis_sessions.clear()
             self._active_analysis_path = None
+            self._active_analysis_origin = None
             logger.info("WorkspaceManager: All AnalysisSessions cleared.")
 
     def get_batch_session(self, batch_results_dir: str) -> Optional[BatchResultSession]:
@@ -172,6 +202,8 @@ class AppState(QObject):
     @current_image_path.setter
     def current_image_path(self, path: str):
         if self._current_image_path != path:
+            if self.is_dirty:
+                self.revert_to_last_committed_state()
             if path:
                 self.reset_analysis_session()
             self._current_image_path = path
@@ -181,7 +213,7 @@ class AppState(QObject):
     @property
     def is_dirty(self) -> bool:
         if self._current_image_path:
-            session = self.workspace_manager.get_analysis_session(self._current_image_path)
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
             if session:
                 return getattr(session, "dirty", False)
         return False
@@ -189,7 +221,7 @@ class AppState(QObject):
     @is_dirty.setter
     def is_dirty(self, val: bool):
         if self._current_image_path:
-            session = self.workspace_manager.get_analysis_session(self._current_image_path)
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
             if session:
                 old_val = getattr(session, "dirty", False)
                 if old_val != val:
@@ -200,7 +232,7 @@ class AppState(QObject):
     @property
     def current_origin_type(self) -> str:
         if self._current_image_path:
-            session = self.workspace_manager.get_analysis_session(self._current_image_path)
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
             if session:
                 return getattr(session, "origin_type", "single")
         return "single"
@@ -208,7 +240,7 @@ class AppState(QObject):
     @property
     def current_batch_origin_context(self) -> Optional[str]:
         if self._current_image_path:
-            session = self.workspace_manager.get_analysis_session(self._current_image_path)
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
             if session:
                 return getattr(session, "batch_origin_context", None)
         return None
@@ -402,6 +434,20 @@ class AppState(QObject):
             self._segmentation_method = val
             logger.info("AppState: segmentation_method updated: %s", val)
             self.segmentation_method_changed.emit(val)
+
+    def revert_to_last_committed_state(self):
+        """Reverts the active analysis session to its last committed results."""
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session and session.dirty:
+                committed = session.committed_results
+                session.analysis_results = committed
+                self._analysis_results = committed
+                session.dirty = False
+                logger.info("AppState: Reverted to last committed state automatically.")
+                self.dirty_state_changed.emit(False)
+                self.analysis_results_updated.emit(committed or {})
+                self.manual_mask_saved.emit(self._current_image_path)
 
     def reset_analysis_session(self):
         """Resets all transient analysis configurations to defaults for a new image."""

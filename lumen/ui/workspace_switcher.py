@@ -43,11 +43,21 @@ class WorkspaceSwitcher(QFrame):
 
     def _on_single_clicked(self):
         if self.active_view != "single":
-            navigation_service.navigate_to("analysis")
+            success = navigation_service.navigate_to("analysis")
+            if not success:
+                self.single_btn.setChecked(False)
+                self.batch_btn.setChecked(True)
+        else:
+            self.single_btn.setChecked(True)
 
     def _on_batch_clicked(self):
         if self.active_view != "batch":
-            navigation_service.navigate_to("batch_explorer")
+            success = navigation_service.navigate_to("batch_explorer")
+            if not success:
+                self.single_btn.setChecked(True)
+                self.batch_btn.setChecked(False)
+        else:
+            self.batch_btn.setChecked(True)
 
     def sync_theme(self, theme_name: str):
         if theme_name == "light":

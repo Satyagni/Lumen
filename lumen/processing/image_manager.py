@@ -29,7 +29,7 @@ class ImageManager:
         ext = Path(file_path).suffix.lower()
         return ext in ALLOWED_EXTENSIONS
 
-    def load_image(self, file_path: str) -> Tuple[bool, str]:
+    def load_image(self, file_path: str, set_state: bool = True) -> Tuple[bool, str]:
         """Validates, loads, extracts metadata, and updates central state for an image."""
         if not file_path:
             return False, "Empty file path provided."
@@ -128,7 +128,8 @@ class ImageManager:
             )
 
             # Alert state manager
-            state.current_image_path = file_path
+            if set_state:
+                state.current_image_path = file_path
             return True, "Successfully loaded image."
 
         except Exception as e:

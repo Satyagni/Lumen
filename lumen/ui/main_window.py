@@ -82,12 +82,22 @@ class MainWindow(QMainWindow):
     def _load_geometry(self):
         """Loads and applies window dimensions saved in the SQLite configuration database."""
         w, h, x, y = config.window_geometry
+        
+        # Clamp geometry to primary screen's available space to prevent window clipping
+        from PySide6.QtWidgets import QApplication
+        screen = QApplication.primaryScreen()
+        if screen:
+            avail = screen.availableGeometry()
+            w = min(w, avail.width())
+            h = min(h, avail.height())
+
+        # Set minimum size for general usability
+        self.setMinimumSize(1024, 700)
+
         self.resize(w, h)
         if x >= 0 and y >= 0:
             self.move(x, y)
         else:
-            # Standard center screen geometry fallback
-            self.setMinimumSize(1024, 700)
             logger.debug("MainWindow: Position coordinates fallback to center.")
 
     def _init_connections(self):
@@ -101,46 +111,38 @@ class MainWindow(QMainWindow):
         self.page_stack.setCurrentIndex(target_idx)
         logger.debug("MainWindow: Workspace stacked widget shifted to index %d", target_idx)
 
+        # Force a geometry layout refresh during page transitions
+        active_widget = self.page_stack.currentWidget()
+        if active_widget:
+            def force_layout_refresh(widget):
+                if not widget:
+                    return
+                lay = widget.layout
+                layout = lay() if callable(lay) else lay
+                if layout:
+                    layout.invalidate()
+                    layout.activate()
+                from PySide6.QtWidgets import QWidget
+                for child in widget.findChildren(QWidget):
+                    child.updateGeometry()
+                    child_lay = child.layout
+                    child_layout = child_lay() if callable(child_lay) else child_lay
+                    if child_layout:
+                        child_layout.invalidate()
+                        child_layout.activate()
+            
+            force_layout_refresh(active_widget)
+            active_widget.updateGeometry()
+            active_widget.update()
+            
+        self.page_stack.updateGeometry()
+        self.page_stack.update()
+
     def closeEvent(self, event):
         """Saves current window coordinates on closure to preserve geometry settings."""
         if state.is_dirty:
-            import sys
-            is_testing = "unittest" in sys.modules or "pytest" in sys.modules
-            if is_testing:
-                state.is_dirty = False
-                event.accept()
-            else:
-                from PySide6.QtWidgets import QMessageBox
-                msg_box = QMessageBox(self)
-                msg_box.setWindowTitle("Unsaved Changes")
-                
-                # Determine correct button text based on origin
-                save_text = "Save to Batch" if state.current_origin_type == "batch" else "Save Analysis"
-                
-                msg_box.setText("You have unsaved changes in the active Analysis Session.\nDo you want to save them before closing?")
-                msg_box.setIcon(QMessageBox.Question)
-                
-                save_btn = msg_box.addButton(save_text, QMessageBox.AcceptRole)
-                discard_btn = msg_box.addButton("Discard", QMessageBox.DestructiveRole)
-                cancel_btn = msg_box.addButton("Cancel", QMessageBox.RejectRole)
-                
-                msg_box.setDefaultButton(save_btn)
-                msg_box.exec()
-                
-                clicked = msg_box.clickedButton()
-                if clicked == save_btn:
-                    success = self.analysis_page.save_analysis()
-                    if success:
-                        event.accept()
-                    else:
-                        event.ignore()
-                        return
-                elif clicked == discard_btn:
-                    state.is_dirty = False
-                    event.accept()
-                else:
-                    event.ignore()
-                    return
+            state.revert_to_last_committed_state()
+            event.accept()
 
         try:
             geometry = self.geometry()

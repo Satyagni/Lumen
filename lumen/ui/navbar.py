@@ -141,6 +141,7 @@ class NavbarWidget(QFrame):
             "upload": "File Upload",
             "analysis": "Image Analysis",
             "results": "Quantification Results",
+            "batch_progress": "Batch Analysis Pipeline",
             "batch_explorer": "Batch Results Explorer",
             "settings": "System Settings"
         }

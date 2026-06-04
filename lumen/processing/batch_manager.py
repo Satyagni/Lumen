@@ -21,6 +21,8 @@ class BatchProcessingManager(QObject):
     batch_progress_updated = Signal(int, int, str)       # completed, failed, current_image_name
     batch_finished = Signal(int, int, str)               # completed, failed, results_dir
     batch_cancelled = Signal()
+    batch_paused = Signal()
+    batch_resumed = Signal()
 
     # Internal signal: relays image result to main thread for Qt-safe output generation.
     # Connected with Qt.QueuedConnection so the slot always runs on the main thread,
@@ -39,13 +41,17 @@ class BatchProcessingManager(QObject):
         self.skipped_count = 0
         self.active_worker = None
         self._is_cancelled = False
+        self._is_paused_requested = False
         
         self.start_time = 0.0
         self.image_start_time = 0.0
         self.image_runtimes = []
         self.summary_records = []
         self.resolved_backend = ""
-        self.lifecycle_state = ""
+        self.lifecycle_state = "IDLE"
+        self.elapsed_time_accumulated = 0.0
+        self.run_start_time = 0.0
+        self.end_time = 0.0
 
         # Wire internal relay signal with QueuedConnection so output generation
         # always executes on the main thread, even when emitted from a worker thread.
@@ -56,6 +62,11 @@ class BatchProcessingManager(QObject):
 
     def prepare_batch(self, folder_path: str, parameters: dict, recursive: bool = False) -> int:
         """Scans folder for microscopy files, calculates estimated runtime, and prepares outputs."""
+        if self.lifecycle_state == "RUNNING":
+            logger.warning("BatchManager: Cannot prepare batch while running.")
+            return 0
+
+        self.lifecycle_state = "IDLE"
         self.image_paths = []
         self.parameters = parameters
         self._is_cancelled = False
@@ -124,6 +135,14 @@ class BatchProcessingManager(QObject):
 
     def start_batch(self):
         """Starts batch processing sequential loop."""
+        if self.lifecycle_state in ("RUNNING", "PAUSED", "COMPLETED"):
+            logger.warning("BatchManager: Start requested but batch is already active or completed (state: %s).", self.lifecycle_state)
+            return
+
+        if self.active_worker and self.active_worker.isRunning():
+            logger.warning("BatchManager: Active worker is already running. Blocked execution.")
+            return
+
         # Resolve backend preference exactly once at batch start
         segmentation_method = self.parameters.get("segmentation_method", "AI Segmentation")
         if segmentation_method != "AI Segmentation":
@@ -145,9 +164,13 @@ class BatchProcessingManager(QObject):
         self.skipped_count = 0
         self.summary_records = []
         self.start_time = time.time()
+        self.run_start_time = time.perf_counter()
+        self.elapsed_time_accumulated = 0.0
+        self.end_time = 0.0
         self.image_start_time = 0.0
         self.image_runtimes = []
         self._is_cancelled = False
+        self._is_paused_requested = False
         self.lifecycle_state = "RUNNING"
         
         # Create output directory
@@ -172,6 +195,11 @@ class BatchProcessingManager(QObject):
         self._is_cancelled = True
         self.lifecycle_state = "CANCELLING"
         logger.info("BatchManager: Cancellation requested.")
+
+        # Accumulate elapsed time up to cancellation point
+        if self.run_start_time > 0.0:
+            self.elapsed_time_accumulated += (time.perf_counter() - self.run_start_time)
+            self.run_start_time = 0.0
         
         if self.active_worker and self.active_worker.isRunning():
             # Signal cancellation — do NOT call .wait() here as it blocks the main thread
@@ -191,7 +219,7 @@ class BatchProcessingManager(QObject):
         self._write_master_csv()
         self._write_run_manifest()
         self.batch_cancelled.emit()
-        self.active_worker = None
+        self._cleanup_active_worker()
 
     def analyze_next_image(self):
         if self._is_cancelled:
@@ -368,11 +396,12 @@ class BatchProcessingManager(QObject):
         self.image_runtimes.append(duration)
 
         self.current_idx += 1
-        # Clear the worker reference before scheduling the next iteration
-        self.active_worker = None
+        self._cleanup_active_worker()
 
         if self._is_cancelled:
             self._on_cancel_finished()
+        elif self._is_paused_requested:
+            self._on_pause_finished()
         else:
             QTimer.singleShot(0, self.analyze_next_image)
 
@@ -589,6 +618,11 @@ class BatchProcessingManager(QObject):
     def finalize_batch(self):
         """Compiles outputs and notifies listeners."""
         self.lifecycle_state = "COMPLETED"
+        if self.run_start_time > 0.0:
+            self.elapsed_time_accumulated += (time.perf_counter() - self.run_start_time)
+            self.run_start_time = 0.0
+        self.end_time = time.perf_counter()
+
         self._write_master_csv()
         self._write_run_manifest()
         
@@ -596,8 +630,107 @@ class BatchProcessingManager(QObject):
         state.batch_progress = 100
         state.batch_status = f"Batch completed. Successful: {self.completed_count}, Failed: {self.failed_count}."
         
-        logger.info("BatchManager: Batch completed. Total elapsed: %.2f minutes", (time.time() - self.start_time) / 60.0)
+        logger.info("BatchManager: Batch completed. Total elapsed: %.2f minutes", self.get_elapsed_seconds() / 60.0)
+        self._cleanup_active_worker()
         self.batch_finished.emit(self.completed_count, self.failed_count, self.output_dir)
+
+    def pause_batch(self):
+        """Requests batch pause at next iteration boundary."""
+        if self.lifecycle_state != "RUNNING":
+            return
+        logger.info("BatchManager: Pause requested.")
+        self._is_paused_requested = True
+
+    def _on_pause_finished(self):
+        self.lifecycle_state = "PAUSED"
+        state.is_batch_active = False
+        if self.run_start_time > 0.0:
+            self.elapsed_time_accumulated += (time.perf_counter() - self.run_start_time)
+            self.run_start_time = 0.0
+        self.batch_paused.emit()
+
+    def resume_batch(self):
+        """Resumes batch processing from current index."""
+        if self.lifecycle_state != "PAUSED":
+            return
+        logger.info("BatchManager: Resuming batch analysis.")
+        self.lifecycle_state = "RUNNING"
+        self._is_paused_requested = False
+        self.run_start_time = time.perf_counter()
+        
+        state.is_batch_active = True
+        state.batch_status = f"Processing {self.current_idx + 1}/{len(self.image_paths)}"
+        
+        self.batch_resumed.emit()
+        QTimer.singleShot(0, self.analyze_next_image)
+
+    def get_elapsed_seconds(self) -> float:
+        """Returns elapsed run time in seconds."""
+        if self.lifecycle_state == "RUNNING" and self.run_start_time > 0.0:
+            return self.elapsed_time_accumulated + (time.perf_counter() - self.run_start_time)
+        return self.elapsed_time_accumulated
+
+    def get_elapsed_time_hhmmss(self) -> str:
+        """Returns elapsed run time formatted as HH:MM:SS."""
+        elapsed = self.get_elapsed_seconds()
+        hours = int(elapsed // 3600)
+        mins = int((elapsed % 3600) // 60)
+        secs = int(elapsed % 60)
+        return f"{hours:02d}:{mins:02d}:{secs:02d}"
+
+    def get_completed_time_str(self) -> str:
+        """Returns completed time formatted as 'Xm Ys' or 'Zs'."""
+        elapsed = self.get_elapsed_seconds()
+        mins = int(elapsed // 60)
+        secs = int(elapsed % 60)
+        if mins > 0:
+            return f"{mins}m {secs}s"
+        return f"{secs}s"
+
+    def _cleanup_active_worker(self):
+        """Ensures active worker thread is gracefully quit, waited on, and deleted."""
+        if self.active_worker:
+            logger.info("BatchManager: Performing safe worker thread cleanup.")
+            try:
+                try:
+                    self.active_worker.finished_successfully.disconnect()
+                except Exception:
+                    pass
+                try:
+                    self.active_worker.failed.disconnect()
+                except Exception:
+                    pass
+                try:
+                    self.active_worker.finished.disconnect()
+                except Exception:
+                    pass
+                
+                if self.active_worker.isRunning():
+                    self.active_worker.cancel()
+                    self.active_worker.quit()
+                    self.active_worker.wait()
+                self.active_worker.deleteLater()
+            except Exception as e:
+                logger.error("BatchManager: Exception during worker cleanup: %s", e)
+            finally:
+                self.active_worker = None
+
+    def reset_batch(self):
+        """Resets the batch manager singleton to fresh idle state."""
+        logger.info("BatchManager: Resetting batch state.")
+        self.lifecycle_state = "IDLE"
+        self._is_cancelled = True
+        self.image_paths = []
+        self.completed_count = 0
+        self.failed_count = 0
+        self.skipped_count = 0
+        self.summary_records = []
+        self.image_runtimes = []
+        self.resolved_backend = ""
+        self.elapsed_time_accumulated = 0.0
+        self.run_start_time = 0.0
+        self._cleanup_active_worker()
+        state.is_batch_active = False
 
 # Global singleton instance of BatchProcessingManager
 batch_manager = BatchProcessingManager()

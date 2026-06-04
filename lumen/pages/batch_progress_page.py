@@ -4,7 +4,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton, QProgressBar, QGridLayout, QScrollArea, QSizePolicy, QSplitter
 )
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, QTimer
 from PySide6.QtGui import QCursor
 from lumen.core.logger import logger
 from lumen.workflows.state import state
@@ -19,6 +19,8 @@ class BatchProgressPage(QWidget):
         super().__init__(parent)
         self.total_images = 0
         self.results_dir = ""
+        self.ui_timer = QTimer(self)
+        self.ui_timer.timeout.connect(self._update_ui_timer)
         self._setup_ui()
         self._init_connections()
         self._sync_theme()
@@ -144,12 +146,20 @@ class BatchProgressPage(QWidget):
         grid.addWidget(be_title, 0, 4)
         grid.addWidget(self.backend_val, 0, 5)
 
-        rem_title = QLabel("Est. Remaining:")
-        rem_title.setStyleSheet(lbl_style)
+        self.rem_title = QLabel("Est. Remaining:")
+        self.rem_title.setStyleSheet(lbl_style)
         self.rem_val = QLabel("~0 mins")
         self.rem_val.setStyleSheet("font-size: 14px; font-weight: bold; color: #818CF8;")
-        grid.addWidget(rem_title, 1, 4)
+        grid.addWidget(self.rem_title, 1, 4)
         grid.addWidget(self.rem_val, 1, 5)
+
+        # Column 4
+        el_title = QLabel("Elapsed Time:")
+        el_title.setStyleSheet(lbl_style)
+        self.elapsed_val = QLabel("00:00:00")
+        self.elapsed_val.setStyleSheet("font-size: 14px; font-weight: bold; color: #818CF8;")
+        grid.addWidget(el_title, 0, 6)
+        grid.addWidget(self.elapsed_val, 0, 7)
 
         dash_layout.addWidget(self.stats_frame)
         self.splitter.addWidget(self.dashboard_card)
@@ -194,8 +204,13 @@ class BatchProgressPage(QWidget):
         self.splitter.setCollapsible(1, True)
         self.splitter.setSizes([200, 300])
 
-        # 3. Actions Row (Cancel Button during execution)
+        # 3. Actions Row (Pause & Cancel Buttons during execution)
         self.actions_layout = QHBoxLayout()
+        self.pause_btn = QPushButton("Pause Batch")
+        self.pause_btn.setProperty("class", "SecondaryButton")
+        self.pause_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        self.actions_layout.addWidget(self.pause_btn)
+
         self.cancel_btn = QPushButton("Cancel Batch")
         self.cancel_btn.setProperty("class", "PrimaryButton")
         self.cancel_btn.setStyleSheet("background-color: #DC2626;") # Red cancel button
@@ -271,8 +286,11 @@ class BatchProgressPage(QWidget):
         batch_manager.batch_progress_updated.connect(self._on_batch_progress_updated)
         batch_manager.batch_finished.connect(self._on_batch_finished)
         batch_manager.batch_cancelled.connect(self._on_batch_cancelled)
+        batch_manager.batch_paused.connect(self._on_batch_paused)
+        batch_manager.batch_resumed.connect(self._on_batch_resumed)
 
         # Local action buttons
+        self.pause_btn.clicked.connect(self._on_pause_clicked)
         self.cancel_btn.clicked.connect(self._on_cancel_clicked)
         self.review_results_btn.clicked.connect(self._on_review_clicked)
         self.open_dir_btn.clicked.connect(self._on_open_dir_clicked)
@@ -337,19 +355,28 @@ class BatchProgressPage(QWidget):
         self.backend_val.setText(batch_manager.resolved_backend)
         
         # Calculate time estimation
-        rem_min = batch_manager.get_estimated_runtime_minutes()
-        self.rem_val.setText(f"~{rem_min} mins")
+        self.rem_title.setVisible(True)
+        self.rem_val.setVisible(True)
+        self.rem_val.setText("Estimating...")
+        self.elapsed_val.setText("00:00:00")
 
         # Hide completion panel, show progress dash & log
         self.completion_card.setVisible(False)
         self.dashboard_card.setVisible(True)
         self.log_card.setVisible(True)
         
-        # Reset cancel button completely to prevent leakage/zombie state
+        # Reset cancel and pause buttons completely to prevent leakage/zombie state
         self.cancel_btn.setText("Cancel Batch")
         self.cancel_btn.setEnabled(True)
         self.cancel_btn.setVisible(True)
         
+        self.pause_btn.setText("Pause Batch")
+        self.pause_btn.setEnabled(True)
+        self.pause_btn.setVisible(True)
+        
+        if batch_manager.lifecycle_state == "RUNNING" and not self.ui_timer.isActive():
+            self.ui_timer.start(1000)
+            
         self.clear_logs()
 
     @Slot(int, int, str)
@@ -363,21 +390,8 @@ class BatchProgressPage(QWidget):
         self.failed_val.setText(str(failed))
         self.skipped_val.setText(str(batch_manager.skipped_count))
 
-        # Update remaining time (adaptive estimation with rolling average smoothing)
-        if self.total_images > 0 and processed > 0:
-            remaining_images = max(0, self.total_images - processed)
-            if processed >= 2 and len(batch_manager.image_runtimes) >= 2:
-                # Rolling average of the last 3 image runtimes
-                recent = batch_manager.image_runtimes[-3:]
-                avg_time_s = sum(recent) / len(recent)
-                rem_sec = avg_time_s * remaining_images
-            else:
-                # Early frames fallback to static estimate
-                avg_per_image = (batch_manager.get_estimated_runtime_minutes() * 60) / self.total_images
-                rem_sec = avg_per_image * remaining_images
-            
-            rem_min = max(0.1, round(rem_sec / 60.0, 1))
-            self.rem_val.setText(f"~{rem_min} mins")
+        # Update remaining time
+        self._update_remaining_time(processed)
         
         self.status_lbl.setText(f"Processing image {processed + 1} of {self.total_images}: {current_image_name}")
 
@@ -394,7 +408,6 @@ class BatchProgressPage(QWidget):
         self.results_dir = results_dir
         self.progress_bar.setValue(self.total_images)
         self.status_lbl.setText("Batch execution complete!")
-        self.rem_val.setText("0.0 mins")
         
         # Force a final KPI refresh using finalized source of truth from batch_manager
         # Guarantee mathematical invariant completed + failed + skipped == total_images at finish
@@ -411,25 +424,15 @@ class BatchProgressPage(QWidget):
             self.add_log_entry(latest["image_name"], latest["status"])
             log_count += 1
             
-        # Display completion panel
-        self.completion_card.setVisible(True)
-        self.cancel_btn.setVisible(False)
-        
-        # Summary description
-        self.comp_desc.setText(
-            f"Lumen successfully finished folder analysis run.\n\n"
-            f"Processed: {completed + failed} images\n"
-            f"• Completed: {success_completed}\n"
-            f"• Failed: {failed}\n"
-            f"• Skipped (Resume-safe): {skipped}\n\n"
-            f"Results compiled in: {results_dir}"
-        )
+        self.sync_ui_state()
 
     @Slot()
     def _on_batch_cancelled(self):
         self.status_lbl.setText("Batch cancelled by user.")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.setText("Cancelled")
+        self.pause_btn.setEnabled(False)
+        self.ui_timer.stop()
         
         # Force a final KPI refresh of attempted images on cancellation before navigating
         # Do NOT rewrite total_images (total_images represents all valid discovered images)
@@ -444,13 +447,33 @@ class BatchProgressPage(QWidget):
         # Return to upload page
         navigation_service.navigate_to("upload")
 
+    def _on_pause_clicked(self):
+        if batch_manager.lifecycle_state == "RUNNING":
+            self.pause_btn.setText("Pausing...")
+            self.pause_btn.setEnabled(False)
+            batch_manager.pause_batch()
+        elif batch_manager.lifecycle_state == "PAUSED":
+            self.pause_btn.setText("Pause Batch")
+            batch_manager.resume_batch()
+
+    @Slot()
+    def _on_batch_paused(self):
+        self.sync_ui_state()
+
+    @Slot()
+    def _on_batch_resumed(self):
+        self.sync_ui_state()
+
     def _on_cancel_clicked(self):
         self.cancel_btn.setText("Cancelling...")
         self.cancel_btn.setEnabled(False)
+        self.pause_btn.setEnabled(False)
         self.status_lbl.setText("Finishing current image safely...")
         batch_manager.cancel_batch()
 
     def _on_open_dir_clicked(self):
+        if not self.results_dir:
+            self.results_dir = batch_manager.output_dir or state.batch_results_dir
         if self.results_dir and os.path.exists(self.results_dir):
             try:
                 os.startfile(self.results_dir)
@@ -458,13 +481,144 @@ class BatchProgressPage(QWidget):
                 logger.error("BatchProgressPage: Failed to open explorer folder: %s", e)
 
     def _on_review_clicked(self):
+        batch_manager.lifecycle_state = "REVIEWED"
+        if not self.results_dir:
+            self.results_dir = batch_manager.output_dir or state.batch_results_dir
         state.batch_results_dir = self.results_dir
         navigation_service.navigate_to("batch_explorer")
 
     def _on_back_clicked(self):
         # Reset batch states & redirect to upload page
-        state.is_batch_active = False
+        batch_manager.reset_batch()
         navigation_service.navigate_to("upload")
+
+    def _update_ui_timer(self):
+        if batch_manager.lifecycle_state in ("RUNNING", "PAUSED", "COMPLETED"):
+            self.elapsed_val.setText(batch_manager.get_elapsed_time_hhmmss())
+
+    def sync_ui_state(self):
+        state_name = batch_manager.lifecycle_state
+        if state_name == "RUNNING":
+            self.dashboard_card.setVisible(True)
+            self.log_card.setVisible(True)
+            self.completion_card.setVisible(False)
+            
+            self.cancel_btn.setVisible(True)
+            self.cancel_btn.setEnabled(True)
+            self.cancel_btn.setText("Cancel Batch")
+            
+            self.pause_btn.setVisible(True)
+            self.pause_btn.setEnabled(True)
+            self.pause_btn.setText("Pause Batch")
+            
+            self.progress_bar.setMaximum(len(batch_manager.image_paths))
+            self.total_val.setText(str(len(batch_manager.image_paths)))
+            self.total_images = len(batch_manager.image_paths)
+            self.backend_val.setText(batch_manager.resolved_backend)
+            
+            if not self.ui_timer.isActive():
+                self.ui_timer.start(1000)
+        elif state_name == "PAUSED":
+            self.dashboard_card.setVisible(True)
+            self.log_card.setVisible(True)
+            self.completion_card.setVisible(False)
+            
+            self.cancel_btn.setVisible(True)
+            self.cancel_btn.setEnabled(True)
+            self.cancel_btn.setText("Cancel Batch")
+            
+            self.pause_btn.setVisible(True)
+            self.pause_btn.setEnabled(True)
+            self.pause_btn.setText("Resume Batch")
+            
+            self.progress_bar.setMaximum(len(batch_manager.image_paths))
+            self.total_val.setText(str(len(batch_manager.image_paths)))
+            self.total_images = len(batch_manager.image_paths)
+            self.backend_val.setText(batch_manager.resolved_backend)
+            
+            self.ui_timer.stop()
+        elif state_name == "COMPLETED":
+            self.results_dir = batch_manager.output_dir or state.batch_results_dir
+            self.dashboard_card.setVisible(True)
+            self.log_card.setVisible(True)
+            self.completion_card.setVisible(True)
+            self.cancel_btn.setVisible(False)
+            self.pause_btn.setVisible(False)
+            
+            self.ui_timer.stop()
+            
+            skipped = batch_manager.skipped_count
+            failed = batch_manager.failed_count
+            success_completed = max(0, len(batch_manager.image_paths) - failed - skipped)
+            
+            self.comp_desc.setText(
+                f"Lumen successfully finished folder analysis run.\n\n"
+                f"Completed in {batch_manager.get_completed_time_str()}\n\n"
+                f"Processed: {len(batch_manager.image_paths)} images\n"
+                f"• Completed: {success_completed}\n"
+                f"• Failed: {failed}\n"
+                f"• Skipped (Resume-safe): {skipped}\n\n"
+                f"Results compiled in: {batch_manager.output_dir}"
+            )
+        else: # IDLE or REVIEWED or CANCELLED
+            self.dashboard_card.setVisible(False)
+            self.log_card.setVisible(False)
+            self.completion_card.setVisible(False)
+            self.cancel_btn.setVisible(False)
+            self.pause_btn.setVisible(False)
+            self.ui_timer.stop()
+
+        self._update_remaining_time()
+
+    def _update_remaining_time(self, processed=None):
+        state_name = batch_manager.lifecycle_state
+        if state_name == "PAUSED":
+            self.rem_title.setVisible(True)
+            self.rem_val.setVisible(True)
+            self.rem_val.setText("ETA: Paused")
+        elif state_name == "COMPLETED":
+            self.rem_title.setVisible(False)
+            self.rem_val.setVisible(False)
+        elif state_name == "RUNNING":
+            if processed is None:
+                processed = batch_manager.completed_count + batch_manager.failed_count
+            if self.total_images > 0:
+                remaining_images = max(0, self.total_images - processed)
+                if remaining_images == 0:
+                    self.rem_title.setVisible(True)
+                    self.rem_val.setVisible(True)
+                    self.rem_val.setText("0.0 mins")
+                elif processed >= 3 and len(batch_manager.image_runtimes) >= 3:
+                    self.rem_title.setVisible(True)
+                    self.rem_val.setVisible(True)
+                    avg_time_s = sum(batch_manager.image_runtimes) / len(batch_manager.image_runtimes)
+                    rem_sec = avg_time_s * remaining_images
+                    rem_min = max(0.1, round(rem_sec / 60.0, 1))
+                    self.rem_val.setText(f"~{rem_min} mins")
+                else:
+                    self.rem_title.setVisible(True)
+                    self.rem_val.setVisible(True)
+                    self.rem_val.setText("Estimating...")
+            else:
+                self.rem_title.setVisible(True)
+                self.rem_val.setVisible(True)
+                self.rem_val.setText("Estimating...")
+        else:
+            self.rem_title.setVisible(False)
+            self.rem_val.setVisible(False)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.sync_ui_state()
+        self._update_ui_timer()
+        
+        # Restore log entries if any are missing
+        log_count = self.log_list_layout.count() - 1
+        records = batch_manager.summary_records
+        if log_count < len(records):
+            for i in range(max(0, log_count), len(records)):
+                rec = records[i]
+                self.add_log_entry(rec["image_name"], rec["status"])
 
     @Slot(str)
     def _sync_theme(self, theme_name: str = ""):

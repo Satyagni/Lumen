@@ -24,6 +24,12 @@ class NavigationService:
             logger.error("NavigationService: Unknown page routing request: '%s'", page_name)
             return False
 
+        # Intercept upload page request if there is a running/paused/completed batch
+        from lumen.processing.batch_manager import batch_manager
+        if page_name == "upload" and batch_manager.lifecycle_state in ("RUNNING", "PAUSED", "COMPLETED"):
+            logger.info("NavigationService: Redirecting 'upload' request to 'batch_progress' due to active batch state (%s)", batch_manager.lifecycle_state)
+            page_name = "batch_progress"
+
         # Intercept transitions away from the analysis page if state.is_dirty is True
         if state.current_page == "analysis" and page_name != "analysis" and state.is_dirty:
             state.revert_to_last_committed_state()

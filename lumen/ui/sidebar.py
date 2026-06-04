@@ -119,6 +119,8 @@ class SidebarWidget(QFrame):
         target_page = page_name
         if target_page == "batch_explorer":
             target_page = "analysis"
+        elif target_page == "batch_progress":
+            target_page = "upload"
             
         if target_page in self.nav_buttons:
             # Check the button matching current page (triggers QButtonGroup exclusion)

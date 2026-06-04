@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QStackedWidget
+from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QStackedWidget, QMessageBox
 from PySide6.QtCore import Slot, Qt
 from lumen.core.config import config
 from lumen.core.logger import logger
@@ -139,7 +139,30 @@ class MainWindow(QMainWindow):
         self.page_stack.update()
 
     def closeEvent(self, event):
-        """Saves current window coordinates on closure to preserve geometry settings."""
+        """Saves current window coordinates on closure to preserve geometry settings, guarding active batch runs."""
+        # Safe application close protection during active/paused batch analysis
+        from lumen.processing.batch_manager import batch_manager
+        if batch_manager.lifecycle_state in ("RUNNING", "PAUSED"):
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Exit Cytheon" if "Cytheon" in self.windowTitle() else "Exit Lumen")
+            msg_box.setText("A batch analysis is currently in progress. Are you sure you want to cancel and exit?")
+            continue_btn = msg_box.addButton("Continue Batch", QMessageBox.NoRole)
+            exit_btn = msg_box.addButton("Cancel & Exit", QMessageBox.YesRole)
+            msg_box.setDefaultButton(continue_btn)
+            msg_box.setIcon(QMessageBox.Question)
+            msg_box.exec()
+            
+            if msg_box.clickedButton() == exit_btn:
+                logger.info("MainWindow: User confirmed close during active batch. Gracefully cancelling batch...")
+                batch_manager.cancel_batch()
+                if batch_manager.active_worker and batch_manager.active_worker.isRunning():
+                    batch_manager.active_worker.cancel()
+                    batch_manager.active_worker.wait()
+                event.accept()
+            else:
+                event.ignore()
+                return
+
         if state.is_dirty:
             state.revert_to_last_committed_state()
             event.accept()

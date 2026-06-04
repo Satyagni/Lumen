@@ -53,10 +53,9 @@ class TestLumenBatchPipeline(unittest.TestCase):
             shutil.rmtree(str(self.test_batch_dir))
             
         # Reset batch manager singleton states
-        batch_manager.image_paths = []
+        batch_manager.reset_batch()
         batch_manager.parameters = {}
         batch_manager.output_dir = ""
-        batch_manager.summary_records = []
 
     def test_batch_manager_scanning_and_estimation(self):
         """Validates folder globbing, recursive searches, and duration estimation settings."""
@@ -305,39 +304,43 @@ class TestLumenBatchPipeline(unittest.TestCase):
         from lumen.pages.batch_progress_page import BatchProgressPage
         page = BatchProgressPage()
         
+        # Ensure batch manager lifecycle state is RUNNING during progress tracking simulation
+        batch_manager.lifecycle_state = "RUNNING"
+        
         # Manually trigger batch started on page
         page._on_batch_started(10)
         self.assertEqual(page.total_images, 10)
-        self.assertEqual(page.rem_val.text(), f"~{batch_manager.get_estimated_runtime_minutes()} mins")
+        self.assertEqual(page.rem_val.text(), "Estimating...")
         
-        # Test case 1: After 1 image processed (processed < 2, should use static estimate fallback)
+        # Test case 1: After 1 image processed (processed < 3, should use static estimate fallback)
         batch_manager.image_runtimes = [5.0]
         # completed=1, failed=0
         page._on_batch_progress_updated(1, 0, "mock_image_0.tif")
-        # Since processed = 1 < 2, it falls back to static estimate.
-        # remaining = 9 images. Static estimate per image = (get_estimated_runtime_minutes() * 60) / 10
-        avg_per_image = (batch_manager.get_estimated_runtime_minutes() * 60) / 10
-        expected_rem_min_1 = max(0.1, round((avg_per_image * 9) / 60.0, 1))
-        self.assertEqual(page.rem_val.text(), f"~{expected_rem_min_1} mins")
+        self.assertEqual(page.rem_val.text(), "Estimating...")
         
-        # Test case 2: After 2 images processed (processed = 2 >= 2, should use adaptive rolling average)
+        # Test case 2: After 2 images processed (processed = 2 < 3, should still use static estimate fallback)
         batch_manager.image_runtimes = [5.0, 15.0]
         # completed=2, failed=0
         page._on_batch_progress_updated(2, 0, "mock_image_1.tif")
-        # processed = 2 >= 2. len(image_runtimes) = 2.
-        # rolling avg of last 3 = (5.0 + 15.0) / 2 = 10.0 seconds per image
-        # remaining = 8 images
-        # expected_rem_sec = 10.0 * 8 = 80.0 seconds => 1.3 mins
-        self.assertEqual(page.rem_val.text(), "~1.3 mins")
+        self.assertEqual(page.rem_val.text(), "Estimating...")
 
-        # Test case 3: After 4 images processed (processed = 4 >= 2, rolling avg uses last 3 runtimes)
-        # Runtimes: [5.0, 15.0, 12.0, 18.0]
-        # Last 3: [15.0, 12.0, 18.0] => avg = 15.0 seconds per image
+        # Test case 2b: After 3 images processed (processed = 3 >= 3, should use adaptive average)
+        batch_manager.image_runtimes = [5.0, 15.0, 10.0]
+        # completed=3, failed=0
+        page._on_batch_progress_updated(3, 0, "mock_image_2.tif")
+        # processed = 3 >= 3. len(image_runtimes) = 3.
+        # average = (5.0 + 15.0 + 10.0) / 3 = 10.0 seconds per image
+        # remaining = 7 images
+        # expected_rem_sec = 10.0 * 7 = 70.0 seconds => 1.2 mins
+        self.assertEqual(page.rem_val.text(), "~1.2 mins")
+
+        # Test case 3: After 4 images processed (processed = 4 >= 3, average uses all runtimes)
+        # Runtimes: [5.0, 15.0, 12.0, 18.0] => avg = 12.5 seconds per image
         # remaining = 6 images
-        # expected_rem_sec = 15.0 * 6 = 90.0 seconds => 1.5 mins
+        # expected_rem_sec = 12.5 * 6 = 75.0 seconds => 1.2 mins (banker's rounding of 1.25)
         batch_manager.image_runtimes = [5.0, 15.0, 12.0, 18.0]
         page._on_batch_progress_updated(4, 0, "mock_image_3.tif")
-        self.assertEqual(page.rem_val.text(), "~1.5 mins")
+        self.assertEqual(page.rem_val.text(), "~1.2 mins")
 
         # Test case 4: Verify UI values update correctly and handle skipped images
         batch_manager.skipped_count = 2
@@ -386,11 +389,24 @@ class TestLumenBatchPipeline(unittest.TestCase):
         self.assertLessEqual(4 + 2 + 1, 15)
         
         # Test case 8: Centralized backend resolution in batch_manager (Refinement 2)
+        batch_manager.lifecycle_state = "IDLE"
         batch_manager.parameters["backend_preference"] = "CPU"
         batch_manager.start_batch()
         self.assertEqual(batch_manager.resolved_backend, "CPU")
         page._on_batch_started(12)
         self.assertEqual(page.backend_val.text(), "CPU")
+
+        # Test case 9: Verify PAUSED and COMPLETED visibility and ETA text
+        batch_manager.lifecycle_state = "PAUSED"
+        page.sync_ui_state()
+        self.assertEqual(page.rem_val.text(), "ETA: Paused")
+        self.assertFalse(page.rem_val.isHidden())
+        self.assertFalse(page.rem_title.isHidden())
+        
+        batch_manager.lifecycle_state = "COMPLETED"
+        page.sync_ui_state()
+        self.assertTrue(page.rem_val.isHidden())
+        self.assertTrue(page.rem_title.isHidden())
 
     def test_batch_manager_run_manifest_generation(self):
         """Verifies that run_manifest.json is generated correctly with proper metadata schema."""
@@ -596,6 +612,25 @@ class TestLumenBatchPipeline(unittest.TestCase):
         with open(summary_csv, mode="r", encoding="utf-8") as f:
             records = list(csv.DictReader(f))
         self.assertEqual(len(records), 3)
+
+    def test_batch_explorer_cache_invalidation_on_signals(self):
+        """Verifies that batch_manager signals successfully invalidate loaded_batch_dir cache on BatchResultsExplorerPage."""
+        from lumen.pages.batch_explorer_page import BatchResultsExplorerPage
+        explorer = BatchResultsExplorerPage()
+        
+        # Mock results directory
+        mock_results_dir = str(self.test_batch_dir / "test_cache_inval")
+        explorer._loaded_batch_dir = mock_results_dir
+        
+        # Emit batch_started signal via batch_manager
+        batch_manager.batch_started.emit(5)
+        self.assertIsNone(explorer._loaded_batch_dir, "Cache should be invalidated when batch starts")
+        
+        # Restore mock path
+        explorer._loaded_batch_dir = mock_results_dir
+        # Emit batch_finished signal via batch_manager
+        batch_manager.batch_finished.emit(5, 0, mock_results_dir)
+        self.assertIsNone(explorer._loaded_batch_dir, "Cache should be invalidated when batch finishes")
 
 
 if __name__ == "__main__":

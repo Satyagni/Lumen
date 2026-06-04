@@ -15,6 +15,7 @@ from PySide6.QtGui import QPixmap, QImage, QCursor
 
 from lumen.core.logger import logger
 from lumen.workflows.state import state
+from lumen.processing.batch_manager import batch_manager
 from lumen.core.services.navigation_service import navigation_service
 from lumen.core.services.theme_service import theme_service
 from lumen.pages.analysis_page import InteractiveImageViewer
@@ -414,8 +415,8 @@ class BatchResultsExplorerPage(QWidget):
         self.navigator_list.itemDoubleClicked.connect(self._on_open_analysis_clicked)
 
         # Invalidate batch cache when a new batch starts or finishes, or when a manual mask is saved
-        state.batch_started.connect(self._invalidate_batch_cache)
-        state.batch_finished.connect(self._invalidate_batch_cache)
+        batch_manager.batch_started.connect(self._invalidate_batch_cache)
+        batch_manager.batch_finished.connect(self._invalidate_batch_cache)
         state.manual_mask_saved.connect(self._invalidate_batch_cache)
 
         # Initial boot check
@@ -432,6 +433,15 @@ class BatchResultsExplorerPage(QWidget):
     def _invalidate_batch_cache(self, *args, **kwargs):
         logger.info("BatchExplorer: Invalidating loaded batch directory cache due to batch state update.")
         self._loaded_batch_dir = None
+        results_dir = None
+        for arg in args:
+            if isinstance(arg, str) and os.path.isdir(arg):
+                results_dir = arg
+                break
+        if not results_dir:
+            results_dir = state.batch_results_dir
+        if results_dir:
+            state.workspace_manager.reset_batch_session(results_dir)
 
     def _ui_matches_session(self, session) -> bool:
         if not session:
@@ -461,6 +471,52 @@ class BatchResultsExplorerPage(QWidget):
             
         return True
 
+    def _reset_explorer_state(self):
+        logger.info("BatchExplorer: Performing full state reset and UI reconstruction.")
+        # 1. Clear navigator list safely
+        self.navigator_list.blockSignals(True)
+        self.navigator_list.clearSelection()
+        self.navigator_list.clear()
+        self.navigator_list.blockSignals(False)
+
+        # 2. Reset records and manifest
+        self.records = []
+        self.manifest_data = {}
+
+        # 3. Clear image viewer
+        self.image_viewer.clear()
+        self.image_viewer.set_analysis_results(None)
+
+        # 4. Explicitly rebuild the metadata panel widgets and container
+        if hasattr(self, "meta_container") and self.meta_container is not None:
+            # Delete child widgets safely first
+            if hasattr(self, "meta_grid") and self.meta_grid is not None:
+                for i in reversed(range(self.meta_grid.count())):
+                    item = self.meta_grid.itemAt(i)
+                    if item:
+                        w = item.widget()
+                        if w is not None:
+                            w.setParent(None)
+                            w.deleteLater()
+                self.meta_grid.deleteLater()
+                self.meta_grid = None
+            self.meta_container.setParent(None)
+            self.meta_container.deleteLater()
+            self.meta_container = None
+
+        # Reconstruct fresh metadata container & layout
+        self.meta_container = QWidget()
+        self.meta_container.setStyleSheet("background: transparent;")
+        self.meta_grid = QGridLayout(self.meta_container)
+        self.meta_grid.setContentsMargins(0, 0, 0, 0)
+        self.meta_grid.setSpacing(12)
+        self.meta_scroll.setWidget(self.meta_container)
+
+        # 5. Reset cached references & UI state
+        self._loaded_batch_dir = None
+        self._temp_restore_viewer_state = None
+        self.open_analysis_btn.setEnabled(False)
+
     def _load_from_state(self):
         results_dir = state.batch_results_dir
         if not results_dir or not os.path.exists(results_dir):
@@ -477,6 +533,9 @@ class BatchResultsExplorerPage(QWidget):
             self._ui_matches_session(session)):
             logger.info("BatchExplorer: Batch directory %s already loaded and matches session. Skipping load.", results_dir)
             return
+
+        # Perform full explorer invalidation and UI reconstruction before load
+        self._reset_explorer_state()
 
         self._placeholder.setVisible(False)
         self.left_panel.setVisible(True)

@@ -1,6 +1,6 @@
 # Lumen
 
-A modern, AI-powered desktop microscopy analysis platform focused on automated cell segmentation, workflow intelligence, and high-throughput scientific data extraction.
+A modern, AI-powered desktop microscopy analysis platform focused on AI Assisted Biological Image Analysis, workflow intelligence, and high-throughput scientific data extraction.
 
 ---
 

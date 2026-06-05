@@ -666,10 +666,38 @@ class AnalysisPage(QWidget):
         scroll_layout.setContentsMargins(0, 0, 0, 0)
         scroll_layout.setSpacing(14)
 
-        # Active workflow title
-        self.wf_title = QLabel("No active workflow")
-        self.wf_title.setStyleSheet("font-weight: bold; font-size: 12px; color: #6366F1;")
-        scroll_layout.addWidget(self.wf_title)
+        # Active workflow label & combobox
+        self.wf_lbl = QLabel("Active Workflow:")
+        self.wf_lbl.setObjectName("WorkflowLabel")
+        self.wf_lbl.setStyleSheet("font-weight: bold; font-size: 10px; color: #6366F1; text-transform: uppercase;")
+        scroll_layout.addWidget(self.wf_lbl)
+
+        self.wf_combo = QComboBox()
+        self.wf_combo.setObjectName("WorkflowComboBox")
+        self.wf_combo.addItem("Cell Segmentation", "cell_counting")
+        self.wf_combo.addItem("Fluorescence Analysis", "fluorescence")
+        self.wf_combo.setCursor(QCursor(Qt.PointingHandCursor))
+        scroll_layout.addWidget(self.wf_combo)
+
+        # Warning banner frame
+        self.banner_frame = QFrame()
+        self.banner_frame.setObjectName("WorkflowBannerFrame")
+        self.banner_frame.setStyleSheet("""
+            #WorkflowBannerFrame {
+                background-color: #3730A3;
+                border: 1px solid #4338CA;
+                border-radius: 4px;
+                padding: 8px;
+            }
+        """)
+        banner_layout = QHBoxLayout(self.banner_frame)
+        banner_layout.setContentsMargins(6, 6, 6, 6)
+        self.banner_lbl = QLabel("Fluorescence workflow coming soon — using segmentation workspace.")
+        self.banner_lbl.setStyleSheet("color: #E0E7FF; font-size: 11px; font-weight: 500;")
+        self.banner_lbl.setWordWrap(True)
+        banner_layout.addWidget(self.banner_lbl)
+        scroll_layout.addWidget(self.banner_frame)
+        self.banner_frame.setVisible(False)
 
         # Steps log (not stretching, set to factor 0)
         self.steps_container = QFrame()
@@ -678,6 +706,14 @@ class AnalysisPage(QWidget):
         self.steps_layout.setSpacing(10)
         self.steps_layout.setAlignment(Qt.AlignTop)
         scroll_layout.addWidget(self.steps_container, 0)
+
+        # Segmentation Parameter panel
+        self.segmentation_panel = QFrame()
+        self.segmentation_panel.setObjectName("SegmentationPanel")
+        self.segmentation_panel.setStyleSheet("background: transparent; border: none;")
+        seg_layout = QVBoxLayout(self.segmentation_panel)
+        seg_layout.setContentsMargins(0, 0, 0, 0)
+        seg_layout.setSpacing(10)
 
         # Method Selector
         self.method_lbl = QLabel("Segmentation Method:")
@@ -690,8 +726,22 @@ class AnalysisPage(QWidget):
         self.method_combo.setCurrentText("AI Segmentation (Cellpose)")
         self.method_combo.setCursor(QCursor(Qt.PointingHandCursor))
         
-        scroll_layout.addWidget(self.method_lbl)
-        scroll_layout.addWidget(self.method_combo)
+        seg_layout.addWidget(self.method_lbl)
+        seg_layout.addWidget(self.method_combo)
+
+        # Model Selector
+        self.model_lbl = QLabel("Segmentation Model:")
+        self.model_lbl.setObjectName("ModelLabel")
+        self.model_lbl.setStyleSheet("font-size: 10px; font-weight: bold; color: #6B7280; text-transform: uppercase;")
+        
+        self.model_combo = QComboBox()
+        self.model_combo.setObjectName("ModelComboBox")
+        self.model_combo.addItems(["Auto", "Cyto3", "Nuclei"])
+        self.model_combo.setCurrentText(state.segmentation_model)
+        self.model_combo.setCursor(QCursor(Qt.PointingHandCursor))
+        
+        seg_layout.addWidget(self.model_lbl)
+        seg_layout.addWidget(self.model_combo)
 
         # Quality Selector layout (AI params)
         self.quality_frame = QFrame()
@@ -713,7 +763,9 @@ class AnalysisPage(QWidget):
         
         quality_layout.addWidget(self.quality_lbl)
         quality_layout.addWidget(self.quality_combo)
-        scroll_layout.addWidget(self.quality_frame)
+        seg_layout.addWidget(self.quality_frame)
+        
+        scroll_layout.addWidget(self.segmentation_panel)
         
         scroll_layout.addStretch(1)
 
@@ -805,6 +857,9 @@ class AnalysisPage(QWidget):
 
         # Segmentation controls connections
         self.method_combo.currentTextChanged.connect(self._on_method_combo_changed)
+        self.wf_combo.currentIndexChanged.connect(self._on_workflow_combo_changed)
+        self.model_combo.currentTextChanged.connect(self._on_model_combo_changed)
+        state.segmentation_model_changed.connect(self._on_state_segmentation_model_changed)
         
         # Handle state triggers
         state.image_loaded.connect(self._on_image_loaded)
@@ -1013,6 +1068,10 @@ class AnalysisPage(QWidget):
                 if session.current_workflow:
                     self._on_workflow_selected(session.current_workflow)
                     
+                self.model_combo.blockSignals(True)
+                self.model_combo.setCurrentText(state.segmentation_model)
+                self.model_combo.blockSignals(False)
+                    
                 self._loaded_image_path = path
                 self._loaded_image_origin = state.current_origin_type
                 self.force_layout_refresh()
@@ -1141,10 +1200,18 @@ class AnalysisPage(QWidget):
 
     @Slot(str)
     def _on_workflow_selected(self, wf_id: str):
+        # Update combobox selection silently
+        self.wf_combo.blockSignals(True)
+        idx = self.wf_combo.findData(wf_id)
+        if idx >= 0:
+            self.wf_combo.setCurrentIndex(idx)
+        self.wf_combo.blockSignals(False)
+
+        # Toggle warning banner based on workflow mode
+        self.banner_frame.setVisible(wf_id == "fluorescence")
+
         wf = workflow_manager.get_workflow(wf_id)
         if wf:
-            self.wf_title.setText(wf.name)
-            
             # Clear previous steps
             for i in reversed(range(self.steps_layout.count())): 
                 widget = self.steps_layout.itemAt(i).widget()
@@ -1174,16 +1241,31 @@ class AnalysisPage(QWidget):
                 """)
                 self.steps_layout.addWidget(step_lbl)
         else:
-            self.wf_title.setText("No active workflow")
-            
             # Clean layout
             for i in reversed(range(self.steps_layout.count())): 
                 widget = self.steps_layout.itemAt(i).widget()
                 if widget is not None:
                     widget.deleteLater()
 
+    def _on_workflow_combo_changed(self, index: int):
+        wf_id = self.wf_combo.itemData(index)
+        if not wf_id:
+            return
+        logger.info("AnalysisPage: Switching workflow mode in workspace to %s", wf_id)
+        state.current_workflow = wf_id
+
+    def _on_model_combo_changed(self, text: str):
+        state.segmentation_model = text
+
+    @Slot(str)
+    def _on_state_segmentation_model_changed(self, val: str):
+        self.model_combo.blockSignals(True)
+        self.model_combo.setCurrentText(val)
+        self.model_combo.blockSignals(False)
+
     def _set_controls_enabled(self, enabled: bool):
         self.method_combo.setEnabled(enabled)
+        self.model_combo.setEnabled(enabled)
         self.quality_combo.setEnabled(enabled)
 
     def _on_run_analysis_clicked(self):
@@ -1222,9 +1304,14 @@ class AnalysisPage(QWidget):
         }
 
         # Build parameters dictionary containing selected settings
+        model_override = state.segmentation_model.lower()
+        if model_override == "auto":
+            model_override = None
+
         parameters = {
             "segmentation_method": state.segmentation_method,
-            "quality_mode": state.quality_mode
+            "quality_mode": state.quality_mode,
+            "model_type_override": model_override
         }
 
         success = processing_manager.run_analysis(image_path, parameters, callbacks)
@@ -1822,7 +1909,17 @@ class AnalysisPage(QWidget):
                 }
             """)
             
-            self.wf_title.setStyleSheet("font-weight: bold; font-size: 12px; color: #4F46E5;")
+            self.wf_lbl.setStyleSheet("font-weight: bold; font-size: 11px; color: #4F46E5; text-transform: uppercase;")
+            self.model_lbl.setStyleSheet("font-size: 10px; font-weight: bold; color: #4B5563; text-transform: uppercase;")
+            self.banner_frame.setStyleSheet("""
+                #WorkflowBannerFrame {
+                    background-color: #EEF2F6;
+                    border: 1px solid #C7D2FE;
+                    border-radius: 4px;
+                    padding: 8px;
+                }
+            """)
+            self.banner_lbl.setStyleSheet("color: #4338CA; font-size: 11px; font-weight: 500;")
             self.right_panel.findChildren(QLabel)[0].setStyleSheet("font-size: 15px; font-weight: bold; color: #111827;")
  
             # Sync steps labels inside layout
@@ -1956,7 +2053,17 @@ class AnalysisPage(QWidget):
                 }
             """)
             
-            self.wf_title.setStyleSheet("font-weight: bold; font-size: 12px; color: #6366F1;")
+            self.wf_lbl.setStyleSheet("font-weight: bold; font-size: 11px; color: #6366F1; text-transform: uppercase;")
+            self.model_lbl.setStyleSheet("font-size: 10px; font-weight: bold; color: #6B7280; text-transform: uppercase;")
+            self.banner_frame.setStyleSheet("""
+                #WorkflowBannerFrame {
+                    background-color: #3730A3;
+                    border: 1px solid #4338CA;
+                    border-radius: 4px;
+                    padding: 8px;
+                }
+            """)
+            self.banner_lbl.setStyleSheet("color: #E0E7FF; font-size: 11px; font-weight: 500;")
             self.right_panel.findChildren(QLabel)[0].setStyleSheet("font-size: 15px; font-weight: bold; color: #FFFFFF;")
             
             for i in range(self.steps_layout.count()):

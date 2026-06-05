@@ -107,9 +107,9 @@ class SettingsPage(QWidget):
         hw_layout.addWidget(hw_title)
 
         # Status displays
-        backend_lbl = QLabel(f"Active Processing Backend:  {gpu_service.backend}")
-        backend_lbl.setStyleSheet("font-size: 12px; color: #E5E7EB;")
-        hw_layout.addWidget(backend_lbl)
+        self.backend_lbl = QLabel(f"Active Processing Backend:  {gpu_service.backend}")
+        self.backend_lbl.setStyleSheet("font-size: 12px; color: #E5E7EB;")
+        hw_layout.addWidget(self.backend_lbl)
 
         # Detailed state label
         self.cuda_avail_lbl = QLabel()
@@ -160,6 +160,7 @@ class SettingsPage(QWidget):
         self.theme_combo.currentIndexChanged.connect(self._on_theme_selection_changed)
         # Sync state changes (in case theme toggled from navbar)
         state.theme_changed.connect(self._on_state_theme_changed)
+        state.backend_preference_changed.connect(self._update_hardware_diagnostics)
 
     def _on_theme_selection_changed(self, index: int):
         target_theme = "dark" if index == 0 else "light"
@@ -174,3 +175,17 @@ class SettingsPage(QWidget):
         self.theme_combo.setCurrentIndex(target_idx)
         self.theme_combo.blockSignals(False)
         logger.debug("Settings: Synced theme selection box.")
+
+    @Slot(str)
+    def _update_hardware_diagnostics(self, preference: str):
+        from lumen.core.services.gpu_service import gpu_service
+        use_gpu, resolved_name = gpu_service.resolve_execution_backend(preference)
+        self.backend_lbl.setText(f"Active Processing Backend:  {resolved_name}")
+        
+        # update cuda status label
+        if resolved_name == "CUDA":
+            self.cuda_avail_lbl.setText("Hardware Backend: CUDA GPU Acceleration Active")
+            self.cuda_avail_lbl.setStyleSheet("color: #34D399; font-weight: 500;")
+        else:
+            self.cuda_avail_lbl.setText("Hardware Backend: CPU Mode (CUDA inactive or overridden by preference)")
+            self.cuda_avail_lbl.setStyleSheet("color: #F87171;")

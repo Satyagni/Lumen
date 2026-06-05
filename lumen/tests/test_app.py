@@ -215,11 +215,11 @@ class TestLumenCore(unittest.TestCase):
         import numpy as np
         
         self.assertEqual(determine_model_type("Fluorescence Microscopy", "DAPI_stain_well.tif"), "nuclei")
-        self.assertEqual(determine_model_type("Fluorescence Microscopy", "cell_GFP_expression.png"), "cyto")
-        self.assertEqual(determine_model_type("Fluorescence Microscopy"), "cyto")  # Default fallback
-        self.assertEqual(determine_model_type("Brightfield Microscopy"), "cyto")
-        self.assertEqual(determine_model_type("Colony / Plate Imaging"), "cyto")
-        self.assertEqual(determine_model_type("Unknown Biological Imaging"), "cyto")
+        self.assertEqual(determine_model_type("Fluorescence Microscopy", "cell_GFP_expression.png"), "cyto3")
+        self.assertEqual(determine_model_type("Fluorescence Microscopy"), "cyto3")  # Default fallback
+        self.assertEqual(determine_model_type("Brightfield Microscopy"), "cyto3")
+        self.assertEqual(determine_model_type("Colony / Plate Imaging"), "cyto3")
+        self.assertEqual(determine_model_type("Unknown Biological Imaging"), "cyto3")
         
         # Check channel configurations
         dummy_arr = np.zeros((10, 10), dtype=np.uint8)

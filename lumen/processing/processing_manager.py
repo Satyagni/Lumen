@@ -81,7 +81,7 @@ class AnalysisWorker(QThread):
                 raise ValueError(f"Unsupported segmentation method: {segmentation_method}")
 
             from lumen.workflows.cellpose_routing import determine_model_type, determine_channels, get_segmentation_config
-            resolved_model_type = determine_model_type(modality, Path(self.image_path).name)
+            resolved_model_type = determine_model_type(modality, Path(self.image_path).name, meta)
             resolved_channels = determine_channels(modality, meta, raw_arr)
             
             # Clean advanced parameter overrides injection (architectural foundation)
@@ -379,9 +379,12 @@ class BatchAnalysisWorker(QObject):
                     pass
             
             from lumen.workflows.state import state
+            from lumen.workflows.workflow_manager import workflow_manager
+            wf = workflow_manager.get_workflow(state.current_workflow)
+            wf_name = wf.name if wf else "Cell Segmentation"
             return {
                 "image_name": image_name,
-                "workflow": state.current_workflow or "Cell Counting",
+                "workflow": wf_name,
                 "segmentation_mode": self.parameters.get("quality_mode", "Balanced"),
                 "model_type": "cyto",
                 "cell_count": cell_count,
@@ -499,7 +502,7 @@ class BatchAnalysisWorker(QObject):
                     raise ValueError(f"Unsupported segmentation method: {segmentation_method}")
 
                 from lumen.workflows.cellpose_routing import determine_model_type, determine_channels, get_segmentation_config
-                resolved_model_type = determine_model_type(modality, Path(image_path).name)
+                resolved_model_type = determine_model_type(modality, Path(image_path).name, meta)
                 resolved_channels = determine_channels(modality, meta, raw_arr)
                 
                 model_type = self.parameters.get("model_type_override") or resolved_model_type

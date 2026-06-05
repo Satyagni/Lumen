@@ -8,6 +8,11 @@ import PIL.Image
 from PySide6.QtCore import QObject, Signal, QTimer, Qt, QThread, Slot
 from lumen.core.logger import logger
 from lumen.workflows.state import state
+
+def get_current_workflow_name() -> str:
+    from lumen.workflows.workflow_manager import workflow_manager
+    wf = workflow_manager.get_workflow(state.current_workflow)
+    return wf.name if wf else "Cell Segmentation"
 from lumen.processing.processing_manager import AnalysisWorker, BatchAnalysisWorker
 from lumen.pages.results_page import (
     generate_overlay_image,
@@ -377,7 +382,7 @@ class BatchProcessingManager(QObject):
 
             record = {
                 "image_name": image_name,
-                "workflow": state.current_workflow or "Cell Counting",
+                "workflow": get_current_workflow_name(),
                 "segmentation_mode": seg_mode_str,
                 "model_type": results.get("model_type", "cyto"),
                 "cell_count": results.get("cell_count", 0),
@@ -492,7 +497,7 @@ class BatchProcessingManager(QObject):
     def _build_failed_record(self, image_name: str, status_msg: str) -> dict:
         return {
             "image_name": image_name,
-            "workflow": state.current_workflow or "Cell Counting",
+            "workflow": get_current_workflow_name(),
             "segmentation_mode": self.parameters.get("quality_mode", "Balanced"),
             "model_type": "-",
             "cell_count": 0,
@@ -585,7 +590,7 @@ class BatchProcessingManager(QObject):
             
             return {
                 "image_name": image_name,
-                "workflow": state.current_workflow or "Cell Counting",
+                "workflow": get_current_workflow_name(),
                 "segmentation_mode": self.parameters.get("quality_mode", "Balanced"),
                 "model_type": "cyto",
                 "cell_count": cell_count,
@@ -621,7 +626,7 @@ class BatchProcessingManager(QObject):
                 f.write("====================================================\n")
                 f.write(f"Lumen Version: 0.2.0\n")
                 f.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"Active Workflow: {state.current_workflow or 'Cell Counting'}\n")
+                f.write(f"Active Workflow: {get_current_workflow_name()}\n")
                 f.write(f"Segmentation Method: {seg_method}\n")
                 f.write(f"Segmentation Mode Preset: {seg_mode_str}\n")
                 
@@ -675,7 +680,7 @@ class BatchProcessingManager(QObject):
         
         manifest_data = {
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "workflow": state.current_workflow or "Cell Counting",
+            "workflow": get_current_workflow_name(),
             "backend": self.resolved_backend,
             "segmentation_mode": self.parameters.get("quality_mode", "Balanced"),
             "images": self.summary_records

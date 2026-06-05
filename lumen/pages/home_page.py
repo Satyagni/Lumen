@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QGridLayout, QListWidget, QListWidgetItem, QSizePolicy, QGraphicsDropShadowEffect, QPushButton
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QGridLayout, QListWidget, QListWidgetItem, QSizePolicy, QGraphicsDropShadowEffect, QPushButton, QGraphicsOpacityEffect, QMessageBox
 )
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QCursor, QColor
@@ -12,18 +12,27 @@ class QuickActionCard(QFrame):
     
     clicked = Signal(str)
 
-    def __init__(self, workflow_id: str, title: str, desc: str, symbol: str, parent=None):
+    def __init__(self, workflow_id: str, title: str, desc: str, symbol: str, coming_soon: bool = False, disabled: bool = False, parent=None):
         super().__init__(parent)
         self.workflow_id = workflow_id
+        self.coming_soon = coming_soon
+        self.disabled = disabled
         self.setObjectName("ActionCard")
         self.setProperty("class", "CardFrame")
-        self.setFrameShape(QFrame.StyledPanel)
-        self.setCursor(QCursor(Qt.PointingHandCursor))
+        
+        if self.disabled:
+            self.setCursor(QCursor(Qt.ArrowCursor))
+        else:
+            self.setCursor(QCursor(Qt.PointingHandCursor))
+            
         self.setMinimumHeight(120)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         self._setup_ui(title, desc, symbol)
-        self._setup_shadow()
+        if self.disabled:
+            self._setup_opacity()
+        else:
+            self._setup_shadow()
 
     def _setup_ui(self, title: str, desc: str, symbol: str):
         layout = QVBoxLayout(self)
@@ -42,7 +51,14 @@ class QuickActionCard(QFrame):
         title_label.setStyleSheet("font-size: 14px; font-weight: bold;")
 
         top_layout.addWidget(symbol_label)
-        top_layout.addWidget(title_label, 1)
+        top_layout.addWidget(title_label)
+        
+        if self.coming_soon:
+            badge = QLabel("Coming Soon")
+            badge.setStyleSheet("font-size: 9px; padding: 2px 6px; border-radius: 4px; font-weight: bold; background-color: #374151; color: #9CA3AF;")
+            top_layout.addWidget(badge)
+            
+        top_layout.addStretch(1)
         layout.addLayout(top_layout)
 
         # Description
@@ -62,25 +78,35 @@ class QuickActionCard(QFrame):
         self.shadow_effect.setColor(QColor(0, 0, 0, 30))
         self.setGraphicsEffect(self.shadow_effect)
 
+    def _setup_opacity(self):
+        """Greys out the card visually by setting opacity."""
+        self.opacity_effect = QGraphicsOpacityEffect(self)
+        self.opacity_effect.setOpacity(0.4)
+        self.setGraphicsEffect(self.opacity_effect)
+
     # Hover elevation overrides
     def enterEvent(self, event):
-        # Slightly lighten background and change shadow to Indigo tint
+        if self.disabled:
+            super().enterEvent(event)
+            return
+            
         self.shadow_effect.setBlurRadius(25)
         self.shadow_effect.setYOffset(6)
         
-        # Check current theme to draw appropriate shadow color
         theme = state.current_theme
         if theme == "light":
             self.shadow_effect.setColor(QColor(79, 70, 229, 20)) # Light indigo glow
         else:
             self.shadow_effect.setColor(QColor(99, 102, 241, 25))  # Dark indigo glow
             
-        # Trigger redraw
         self.update()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        # Restore standard soft shadow
+        if self.disabled:
+            super().leaveEvent(event)
+            return
+            
         self.shadow_effect.setBlurRadius(15)
         self.shadow_effect.setYOffset(4)
         self.shadow_effect.setColor(QColor(0, 0, 0, 30))
@@ -88,6 +114,8 @@ class QuickActionCard(QFrame):
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):
+        if self.disabled:
+            return
         if event.button() == Qt.LeftButton:
             self.clicked.emit(self.workflow_id)
         super().mousePressEvent(event)
@@ -221,10 +249,10 @@ class HomePage(QWidget):
         grid_layout.setSpacing(16)
 
         self.cards = [
-            QuickActionCard("cell_counting", "Cell Counting", "Detect, segment, and quantify cell nuclei or bodies.", "🧫", self),
-            QuickActionCard("fluorescence", "Fluorescence Analysis", "Measure channel-specific signal intensity profiles.", "🧬", self),
-            QuickActionCard("colony", "Colony Analysis", "Detect and analyze agar plate bacterial culture colonies.", "🧫", self),
-            QuickActionCard("custom", "Custom Workflow", "Chain custom biological pre-processing pipeline blocks.", "⚙️", self)
+            QuickActionCard("cell_counting", "Cell Segmentation", "Detect, segment, and quantify cells or nuclei in biological images.", "🧫", coming_soon=False, disabled=False, parent=self),
+            QuickActionCard("fluorescence", "Fluorescence Analysis", "Measure channel-specific signal intensity profiles.", "🧬", coming_soon=True, disabled=False, parent=self),
+            QuickActionCard("colony", "Colony Analysis", "Detect and analyze agar plate bacterial culture colonies.", "🧫", coming_soon=True, disabled=True, parent=self),
+            QuickActionCard("custom", "Custom Workflow", "Chain custom biological pre-processing pipeline blocks.", "⚙️", coming_soon=True, disabled=True, parent=self)
         ]
 
         # Add to 2x2 grid
@@ -234,10 +262,20 @@ class HomePage(QWidget):
         grid_layout.addWidget(self.cards[3], 1, 1)
         main_layout.addWidget(grid_frame)
 
-        # Section Header: Recent Files
+        # Section Header: Recent Files + Clear Recents Button
+        recent_header_layout = QHBoxLayout()
         recent_header = QLabel("Recent Files")
         recent_header.setStyleSheet("font-size: 15px; font-weight: 600; color: #F3F4F6; margin-top: 10px;")
-        main_layout.addWidget(recent_header)
+        recent_header_layout.addWidget(recent_header)
+        
+        recent_header_layout.addStretch(1)
+        
+        self.clear_recents_btn = QPushButton("Clear Recents")
+        self.clear_recents_btn.setObjectName("ClearRecentsButton")
+        self.clear_recents_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        self.clear_recents_btn.clicked.connect(self._on_clear_recents_clicked)
+        recent_header_layout.addWidget(self.clear_recents_btn)
+        main_layout.addLayout(recent_header_layout)
 
         # 4. Recent Projects List
         self.recent_list = QListWidget()
@@ -264,16 +302,6 @@ class HomePage(QWidget):
             }
         """)
 
-        # Add mock project paths
-        mock_recents = [
-            "C:/Microscopy/ProjectA/DAPI_channel_01.tif",
-            "C:/Microscopy/ProjectA/FITC_channel_01.tif",
-            "C:/CellTests/2026-06-01/Plate_well_B4_brightfield.png"
-        ]
-        for path in mock_recents:
-            item = QListWidgetItem(path)
-            self.recent_list.addItem(item)
-            
         main_layout.addWidget(self.recent_list)
 
         # Setup interactions
@@ -293,22 +321,105 @@ class HomePage(QWidget):
         
         # Check current state on load
         self._on_image_loaded(state.current_image_path)
+        self._load_recent_files()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._load_recent_files()
+
+    def _load_recent_files(self):
+        self.recent_list.clear()
+        from lumen.core.config import config
+        recents = config.recent_files
+        if not recents:
+            item = QListWidgetItem("No recent files.")
+            item.setFlags(Qt.NoItemFlags) # Make it non-clickable
+            self.recent_list.addItem(item)
+            self.clear_recents_btn.setEnabled(False)
+        else:
+            for r in recents:
+                path = r.get("path", "")
+                item = QListWidgetItem(path)
+                item.setData(Qt.UserRole, r.get("workflow_id", ""))
+                self.recent_list.addItem(item)
+            self.clear_recents_btn.setEnabled(True)
+
+    def _on_clear_recents_clicked(self):
+        reply = QMessageBox.question(
+            self,
+            "Clear Recents",
+            "Clear recent file history?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            from lumen.core.config import config
+            config.clear_recent_files()
+            self._load_recent_files()
 
     def _on_card_clicked(self, workflow_id: str):
-        state.current_workflow = workflow_id
-        navigation_service.navigate_to("upload")
+        if workflow_id == "fluorescence":
+            # Redirect to Cell Segmentation (which is cell_counting) but set workflow to fluorescence
+            state.current_workflow = "fluorescence"
+            navigation_service.navigate_to("upload")
+        else:
+            state.current_workflow = workflow_id
+            navigation_service.navigate_to("upload")
 
     def _on_recent_item_clicked(self, item):
         path = item.text()
-        logger.info("Home: Recent file path double clicked: %s", path)
+        if path == "No recent files.":
+            return
+            
+        import os
+        if not os.path.exists(path):
+            reply = QMessageBox.question(
+                self,
+                "File Not Found",
+                "File could not be found. The original file path no longer exists.\n\nRemove from recents?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            if reply == QMessageBox.Yes:
+                from lumen.core.config import config
+                recents = config.recent_files
+                recents = [r for r in recents if r.get("path") != path]
+                import json
+                from lumen.storage.database import db
+                if db:
+                    db.set_setting("recent_files", json.dumps(recents))
+                self._load_recent_files()
+            return
+            
+        workflow_id = item.data(Qt.UserRole)
+        # Safe recent files workflow resolver
+        if workflow_id == "fluorescence":
+            resolved_workflow = "fluorescence"
+        else:
+            resolved_workflow = "cell_counting"
+            
+        logger.info("Home: Recent file path clicked: %s, resolved workflow: %s", path, resolved_workflow)
+        
         from lumen.processing.image_manager import image_manager
         success, msg = image_manager.load_image(path)
         if success:
+            state.current_image_path = path
+            state.current_origin_type = "single"
+            state.current_workflow = resolved_workflow
+            
+            # Start analysis session
+            state.workspace_manager.start_analysis_session(path, origin_type="single")
+            
+            # Reopen inside the single workspace (navigate to analysis page)
             navigation_service.navigate_to("analysis")
         else:
             logger.warning("Home: Failed to load recent item directly: %s", msg)
-            navigation_service.navigate_to("upload")
-            state.current_image_path = path
+            QMessageBox.warning(
+                self,
+                "Error Loading File",
+                f"Could not load the file:\n{path}\n\nError: {msg}",
+                QMessageBox.Ok
+            )
 
     def _on_continue_clicked(self):
         navigation_service.navigate_to("analysis")
@@ -395,6 +506,28 @@ class HomePage(QWidget):
                     color: #111827;
                 }
             """)
+            
+            self.clear_recents_btn.setStyleSheet("""
+                QPushButton {
+                    font-size: 11px;
+                    padding: 4px 8px;
+                    background-color: transparent;
+                    border: 1px solid #D1D5DB;
+                    border-radius: 4px;
+                    color: #4B5563;
+                    margin-top: 10px;
+                }
+                QPushButton:hover {
+                    background-color: #F3F4F6;
+                    color: #111827;
+                    border-color: #4F46E5;
+                }
+                QPushButton:disabled {
+                    color: #9CA3AF;
+                    border-color: #E5E7EB;
+                    background-color: transparent;
+                }
+            """)
         else:
             self.session_card.setStyleSheet("""
                 #CurrentSessionCard {
@@ -433,22 +566,25 @@ class HomePage(QWidget):
                     color: #FFFFFF;
                 }
             """)
-
-    def _on_card_clicked(self, workflow_id: str):
-        state.current_workflow = workflow_id
-        # Transition to Upload Page so they can select file for workflow
-        navigation_service.navigate_to("upload")
-
-    def _on_recent_item_clicked(self, item):
-        path = item.text()
-        logger.info("Home: Recent file path double clicked: %s", path)
-        # Directly load item if valid
-        from lumen.processing.image_manager import image_manager
-        success, msg = image_manager.load_image(path)
-        if success:
-            navigation_service.navigate_to("analysis")
-        else:
-            logger.warning("Home: Failed to load recent item directly: %s", msg)
-            # Default navigate to upload screen
-            navigation_service.navigate_to("upload")
-            state.current_image_path = path # Store path in state anyway
+            
+            self.clear_recents_btn.setStyleSheet("""
+                QPushButton {
+                    font-size: 11px;
+                    padding: 4px 8px;
+                    background-color: transparent;
+                    border: 1px solid #3F3F4E;
+                    border-radius: 4px;
+                    color: #9CA3AF;
+                    margin-top: 10px;
+                }
+                QPushButton:hover {
+                    background-color: #2E2E38;
+                    color: #FFFFFF;
+                    border-color: #4F46E5;
+                }
+                QPushButton:disabled {
+                    color: #4B5563;
+                    border-color: #2B2B35;
+                    background-color: transparent;
+                }
+            """)

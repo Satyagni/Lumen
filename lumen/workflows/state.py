@@ -16,6 +16,7 @@ class AnalysisSession:
         self.show_original_image = True
         self.show_segmentation_overlay = True
         self.segmentation_method = "AI Segmentation"
+        self.segmentation_model = "Auto"
         self.current_workflow = None
         self.viewer_state = None  # Dict of {transform, h_scroll, v_scroll, initial_fit_scale, zoom_touched}
 
@@ -162,6 +163,7 @@ class AppState(QObject):
 
     # Segmentation Method Signals
     segmentation_method_changed = Signal(str)
+    segmentation_model_changed = Signal(str)
     dirty_state_changed = Signal(bool)
 
     def __init__(self):
@@ -434,6 +436,19 @@ class AppState(QObject):
             self._segmentation_method = val
             logger.info("AppState: segmentation_method updated: %s", val)
             self.segmentation_method_changed.emit(val)
+
+    @property
+    def segmentation_model(self) -> str:
+        from lumen.core.config import config
+        return config.segmentation_model
+
+    @segmentation_model.setter
+    def segmentation_model(self, val: str):
+        from lumen.core.config import config
+        if config.segmentation_model != val:
+            config.segmentation_model = val
+            logger.info("AppState: segmentation model preference updated to: %s", val)
+            self.segmentation_model_changed.emit(val)
 
     def revert_to_last_committed_state(self):
         """Reverts the active analysis session to its last committed results."""

@@ -19,8 +19,8 @@ def classify_image(filename: str, channels: int, mode: str, format_str: str) -> 
     # Define workflow descriptors
     cell_counting = {
         "id": "cell_counting",
-        "name": "Cell Counting",
-        "desc": "Detect and count stained nuclei or cell bodies.",
+        "name": "Cell Segmentation",
+        "desc": "Detect and segment cells or nuclei.",
         "relevance": "High"
     }
     fluorescence = {

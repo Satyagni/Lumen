@@ -15,9 +15,9 @@ class WorkflowManager:
         self.workflows: Dict[str, WorkflowMetadata] = {
             "cell_counting": WorkflowMetadata(
                 "cell_counting",
-                "Cell Counting",
-                "Detect, segment, and quantify cell nuclei or bodies in brightfield or fluorescence images.",
-                ["Load Image", "Configure Segmentation Parameters", "Run Counting Engine", "Review and Export Metrics"]
+                "Cell Segmentation",
+                "Detect, segment, and quantify cells or nuclei in biological images.",
+                ["Load Image", "Configure Parameters", "Run Segmentation Engine", "Review and Export Metrics"]
             ),
             "fluorescence": WorkflowMetadata(
                 "fluorescence",

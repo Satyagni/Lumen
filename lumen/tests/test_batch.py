@@ -103,7 +103,7 @@ class TestLumenBatchPipeline(unittest.TestCase):
         with open(meta_file, mode="r", encoding="utf-8") as f:
             content = f.read()
             self.assertIn("LUMEN BATCH ANALYSIS REPRODUCIBILITY METADATA", content)
-            self.assertIn("Active Workflow: cell_counting", content)
+            self.assertIn("Active Workflow: Cell Segmentation", content)
             self.assertIn("Segmentation Mode Preset: Balanced", content)
             self.assertIn("Total Batch Image Files: 3", content)
 

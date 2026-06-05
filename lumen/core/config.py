@@ -73,6 +73,57 @@ class AppConfig:
         if db_module.db:
             db_module.db.set_setting("backend_preference", val)
 
+    @property
+    def recent_files(self) -> list:
+        """Returns the list of recently uploaded files (list of dicts)."""
+        import json
+        if db_module.db:
+            data = db_module.db.get_setting("recent_files", "[]")
+            try:
+                return json.loads(data)
+            except Exception:
+                return []
+        return []
+
+    def add_recent_file(self, path: str, workflow_id: str):
+        """Adds a path to the recent files list in database."""
+        import json
+        if not path:
+            return
+        
+        # Normalize path
+        path = path.replace('\\', '/')
+        
+        recents = self.recent_files
+        # Remove if path already exists to move it to the top
+        recents = [r for r in recents if r.get("path") != path]
+        
+        # Insert at the beginning
+        recents.insert(0, {"path": path, "workflow_id": workflow_id})
+        
+        # Limit to 10 entries
+        recents = recents[:10]
+        
+        if db_module.db:
+            db_module.db.set_setting("recent_files", json.dumps(recents))
+
+    def clear_recent_files(self):
+        """Clears all recent files from the database."""
+        if db_module.db:
+            db_module.db.set_setting("recent_files", "[]")
+
+    @property
+    def segmentation_model(self) -> str:
+        """Returns the saved segmentation model preference. Defaults to 'Auto'."""
+        if db_module.db:
+            return db_module.db.get_setting("segmentation_model", "Auto")
+        return "Auto"
+
+    @segmentation_model.setter
+    def segmentation_model(self, val: str):
+        if db_module.db:
+            db_module.db.set_setting("segmentation_model", val)
+
 # Instantiate global config wrapper
 config = AppConfig()
 

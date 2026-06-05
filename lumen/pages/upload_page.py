@@ -233,20 +233,25 @@ class FolderDropZoneWidget(QFrame):
         layout.setAlignment(Qt.AlignCenter)
 
         self.icon_label = QLabel("📂")
-        self.icon_label.setStyleSheet("font-size: 40px; color: #6366F1;")
+        self.icon_label.setStyleSheet("font-size: 40px; color: #6366F1; background: transparent; border: none;")
         self.icon_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.icon_label)
 
-        self.text_label = QLabel("Drag & drop microscopy folder here, or click to browse")
+        self.text_label = QLabel("Drag & drop microscopy folder here or click to browse")
         self.text_label.setObjectName("FolderDropZoneLabel")
-        self.text_label.setStyleSheet("font-weight: 500; font-size: 13px; color: #9CA3AF;")
+        self.text_label.setStyleSheet("font-weight: 500; font-size: 13px; color: #9CA3AF; background: transparent; border: none;")
         self.text_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.text_label)
 
-        self.sub_label = QLabel("Processes images sequentially with CUDA / CPU backend")
-        self.sub_label.setStyleSheet("font-size: 10px; color: #6B7280;")
-        self.sub_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.sub_label)
+        self.secondary_label = QLabel("Supports microscopy image datasets")
+        self.secondary_label.setStyleSheet("font-size: 11px; color: #9CA3AF; font-weight: 500; background: transparent; border: none;")
+        self.secondary_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.secondary_label)
+
+        self.helper_label = QLabel("TIFF/TIF/PNG supported • more formats coming")
+        self.helper_label.setStyleSheet("font-size: 10px; color: #6B7280; background: transparent; border: none;")
+        self.helper_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.helper_label)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -284,13 +289,17 @@ class FolderDropZoneWidget(QFrame):
         if theme == "light":
             bg = "#EEF2F6" if active else "#FFFFFF"
             border_color = "#818CF8" if active else "#D1D5DB"
-            self.setStyleSheet(f"border: 2px dashed {border_color}; border-radius: 12px; background-color: {bg};")
-            self.text_label.setStyleSheet("font-weight: 500; font-size: 13px; color: #4B5563;")
+            self.setStyleSheet(f"#FolderDropZoneFrame {{ border: 2px dashed {border_color}; border-radius: 12px; background-color: {bg}; }}")
+            self.text_label.setStyleSheet("font-weight: 500; font-size: 13px; color: #4B5563; background: transparent; border: none;")
+            self.secondary_label.setStyleSheet("font-size: 11px; color: #4B5563; font-weight: 500; background: transparent; border: none;")
+            self.helper_label.setStyleSheet("font-size: 10px; color: #6B7280; background: transparent; border: none;")
         else:
             bg = "#1E1B4B" if active else "#141419"
             border_color = "#818CF8" if active else "#4F46E5"
-            self.setStyleSheet(f"border: 2px dashed {border_color}; border-radius: 12px; background-color: {bg};")
-            self.text_label.setStyleSheet("font-weight: 500; font-size: 13px; color: #9CA3AF;")
+            self.setStyleSheet(f"#FolderDropZoneFrame {{ border: 2px dashed {border_color}; border-radius: 12px; background-color: {bg}; }}")
+            self.text_label.setStyleSheet("font-weight: 500; font-size: 13px; color: #9CA3AF; background: transparent; border: none;")
+            self.secondary_label.setStyleSheet("font-size: 11px; color: #9CA3AF; font-weight: 500; background: transparent; border: none;")
+            self.helper_label.setStyleSheet("font-size: 10px; color: #6B7280; background: transparent; border: none;")
 
 
 class UploadPage(QWidget):
@@ -560,8 +569,8 @@ class UploadPage(QWidget):
         w_lbl = QLabel("Analysis Workflow:")
         w_lbl.setStyleSheet("font-size: 11px; color: #9CA3AF; font-weight: bold; text-transform: uppercase;")
         self.batch_workflow_combo = QComboBox()
-        self.batch_workflow_combo.addItem("Cell Counting", "cell_counting")
-        self.batch_workflow_combo.addItem("Nuclei Detection", "nuclei_counting")
+        self.batch_workflow_combo.addItem("Cell Segmentation", "cell_counting")
+        self.batch_workflow_combo.addItem("Fluorescence Analysis", "fluorescence")
         self.batch_workflow_combo.setCursor(QCursor(Qt.PointingHandCursor))
         config_grid.addWidget(w_lbl, 2, 0)
         config_grid.addWidget(self.batch_workflow_combo, 2, 1)
@@ -663,7 +672,7 @@ class UploadPage(QWidget):
         
         self.batch_method_combo.currentIndexChanged.connect(self._on_batch_method_changed)
         self.batch_quality_combo.currentIndexChanged.connect(self._update_batch_estimation)
-        self.batch_workflow_combo.currentIndexChanged.connect(self._update_batch_estimation)
+        self.batch_workflow_combo.currentIndexChanged.connect(self._on_batch_workflow_changed)
         self.batch_backend_combo.currentIndexChanged.connect(self._update_batch_estimation)
         self.batch_recursive_chk.stateChanged.connect(self._update_batch_estimation)
         state.backend_preference_changed.connect(self._on_global_backend_changed)
@@ -735,8 +744,12 @@ class UploadPage(QWidget):
         self._build_recommendation_cards(meta["recommended_workflows"])
         
         recs = meta["recommended_workflows"]
-        if recs:
-            self._on_card_selected(recs[0]["id"])
+        default_wf = recs[0]["id"] if recs else None
+        if recs and state.current_workflow in [wf["id"] for wf in recs]:
+            default_wf = state.current_workflow
+            
+        if default_wf:
+            self._on_card_selected(default_wf)
 
     def _build_recommendation_cards(self, workflows: list):
         for card in self.rec_cards:
@@ -836,10 +849,31 @@ class UploadPage(QWidget):
 
         self._update_batch_estimation()
 
+    def _on_batch_workflow_changed(self, index: int):
+        selected_workflow = self.batch_workflow_combo.currentData()
+        if selected_workflow == "fluorescence":
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self,
+                "Pipeline Under Development",
+                "Fluorescence analysis workflow coming soon.",
+                QMessageBox.Ok
+            )
+        self._update_batch_estimation()
+
     def _update_batch_estimation(self):
         if not self.selected_batch_dir:
             self.batch_estimate_card.setVisible(False)
             self.run_batch_btn.setEnabled(False)
+            return
+
+        selected_workflow = self.batch_workflow_combo.currentData()
+        if selected_workflow == "fluorescence":
+            self.batch_dir_lbl.setText(f"Folder: {self.selected_batch_dir}")
+            self.batch_estimate_card.setVisible(True)
+            self.estimate_val.setText("Fluorescence analysis batch pipeline under development.")
+            self.run_batch_btn.setEnabled(False)
+            self.run_batch_btn.setCursor(QCursor(Qt.ArrowCursor))
             return
 
         # Prepare parameters
@@ -1084,6 +1118,22 @@ class UploadPage(QWidget):
     def _on_proceed_clicked(self):
         if hasattr(self, "staged_image_path") and self.staged_image_path:
             state.current_image_path = self.staged_image_path
+            
+            # Start analysis session
+            state.workspace_manager.start_analysis_session(self.staged_image_path, origin_type="single")
+            
+            # Save to recents history
+            from lumen.core.config import config
+            config.add_recent_file(self.staged_image_path, self.staged_workflow_id)
+            
         if hasattr(self, "staged_workflow_id") and self.staged_workflow_id:
             state.current_workflow = self.staged_workflow_id
+            
         navigation_service.navigate_to("analysis")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if state.current_workflow:
+            idx = self.batch_workflow_combo.findData(state.current_workflow)
+            if idx >= 0:
+                self.batch_workflow_combo.setCurrentIndex(idx)

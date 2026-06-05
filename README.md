@@ -5,7 +5,7 @@ A modern, AI-powered desktop microscopy analysis platform focused on automated c
 ---
 
 > [!NOTE]
-> **Disclaimer**: Lumen v0.2 is a research-focused milestone release. Stability and workflow correctness were prioritized over UI polish.
+> **Disclaimer**: Lumen v0.2 is a research-focused milestone release. We are aware of minor instabilities which will consequently be fixed in future realeases.
 
 ---
 

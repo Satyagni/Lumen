@@ -837,25 +837,35 @@ class TestLumenBatchPipeline(unittest.TestCase):
 
     def test_batch_manager_worker_lifecycle_guards(self):
         """Verifies worker lifecycle validation guards and callback-based destruction transitions in BatchProcessingManager."""
-        from PySide6.QtCore import QCoreApplication
+        from PySide6.QtCore import QCoreApplication, QThread
         from lumen.processing.batch_manager import batch_manager
-        from lumen.processing.processing_manager import AnalysisWorker
+        from lumen.processing.processing_manager import BatchAnalysisWorker
         
         # Reset batch manager to clean state
         batch_manager.reset_batch()
         
-        # Setup mock image paths so analyze_next_image has work
+        # Setup mock image paths
         batch_manager.image_paths = ["image1.png", "image2.png"]
         batch_manager.current_idx = 0
+        batch_manager.output_dir = str(self.test_batch_dir / "batch_results")
         
-        # Create a mock worker
-        mock_worker = AnalysisWorker("image1.png", {})
+        # Create a mock worker and thread
+        mock_worker = BatchAnalysisWorker(["image1.png"], {}, batch_manager.output_dir, 0, 1)
+        mock_thread = QThread()
+        # Keep worker on main thread so its deleteLater is processed by main event loop
+        # mock_worker.moveToThread(mock_thread)
         batch_manager.active_worker = mock_worker
+        batch_manager.batch_thread = mock_thread
         
-        # Verify lifecycle violation checks: analyze_next_image should fail to start because active_worker is not None
-        batch_manager.analyze_next_image()
-        self.assertIsNone(batch_manager._destroying_worker_ref)
-        self.assertEqual(batch_manager.active_worker, mock_worker)
+        # Mock isRunning to return True to test start_batch guard
+        mock_thread.isRunning = lambda: True
+        
+        # Verify lifecycle violation checks: start_batch should refuse to start because batch_thread is running
+        batch_manager.start_batch()
+        self.assertFalse(state.is_batch_active)
+        
+        # Restore isRunning before cleanup so it doesn't try to quit a non-running thread
+        del mock_thread.isRunning
         
         # Trigger cleanup with a callback
         loop = QEventLoop()
@@ -869,11 +879,13 @@ class TestLumenBatchPipeline(unittest.TestCase):
         
         # Verification after cleanup call but before event loop processes:
         self.assertIsNone(batch_manager.active_worker)
+        self.assertIsNone(batch_manager.batch_thread)
         self.assertEqual(batch_manager._destroying_worker_ref(), mock_worker)
         self.assertFalse(callback_called)
         
-        # Clear local strong reference to mock_worker and force garbage collection
+        # Clear local strong references
         del mock_worker
+        del mock_thread
         import gc
         gc.collect()
         

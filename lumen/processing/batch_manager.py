@@ -5,10 +5,10 @@ from pathlib import Path
 import numpy as np
 import tifffile
 import PIL.Image
-from PySide6.QtCore import QObject, Signal, QTimer, Qt
+from PySide6.QtCore import QObject, Signal, QTimer, Qt, QThread, Slot
 from lumen.core.logger import logger
 from lumen.workflows.state import state
-from lumen.processing.processing_manager import AnalysisWorker
+from lumen.processing.processing_manager import AnalysisWorker, BatchAnalysisWorker
 from lumen.pages.results_page import (
     generate_overlay_image,
     export_cell_metrics_csv,
@@ -40,6 +40,8 @@ class BatchProcessingManager(QObject):
         self.failed_count = 0
         self.skipped_count = 0
         self.active_worker = None
+        self.batch_thread = None
+        self.batch_token = 0
         self._destroying_worker_ref = None
         self._on_cleanup_finished_callback = None
         self._is_cancelled = False
@@ -153,8 +155,8 @@ class BatchProcessingManager(QObject):
             state.batch_status = "Error: Cannot start batch. Previous run is still finalizing."
             return
 
-        if self.active_worker and self.active_worker.isRunning():
-            logger.warning("BatchManager: Active worker is already running. Blocked execution.")
+        if self.batch_thread and self.batch_thread.isRunning():
+            logger.warning("BatchManager: Active worker thread is already running. Blocked execution.")
             return
 
         self._batch_ready_for_new_run = False
@@ -184,7 +186,7 @@ class BatchProcessingManager(QObject):
         self.run_start_time = time.perf_counter()
         self.elapsed_time_accumulated = 0.0
         self.end_time = 0.0
-        self.image_start_time = 0.0
+        self.image_start_time = time.time()
         self.image_runtimes = []
         self._is_cancelled = False
         self._is_paused_requested = False
@@ -203,11 +205,40 @@ class BatchProcessingManager(QObject):
         
         self.batch_started.emit(len(self.image_paths))
         
-        # Start sequential run
-        QTimer.singleShot(0, self.analyze_next_image)
+        # Initialize token and persistent thread & worker
+        if not hasattr(self, "batch_token"):
+            self.batch_token = 0
+        self.batch_token += 1
+
+        self.batch_thread = QThread()
+        self.active_worker = BatchAnalysisWorker(
+            image_paths=self.image_paths,
+            parameters=self.parameters,
+            output_dir=self.output_dir,
+            start_idx=0,
+            batch_token=self.batch_token
+        )
+        self.active_worker.moveToThread(self.batch_thread)
+        
+        # Connect signals
+        self.batch_thread.started.connect(self.active_worker.run_batch)
+        self.active_worker.image_completed.connect(self._on_image_completed, Qt.QueuedConnection)
+        self.active_worker.image_failed.connect(self._on_image_failed, Qt.QueuedConnection)
+        self.active_worker.status_updated.connect(self._on_worker_status_updated, Qt.QueuedConnection)
+        
+        # Asynchronous cleanup chain (no wait blocking)
+        self.active_worker.finished.connect(self.batch_thread.quit, Qt.QueuedConnection)
+        self.batch_thread.finished.connect(self._on_thread_finished_cleanup, Qt.QueuedConnection)
+        
+        # Start execution
+        self.batch_thread.start()
 
     def cancel_batch(self):
         """Cancels current batch analysis."""
+        if self.lifecycle_state in ("CANCELLED", "COMPLETED", "CANCELLING"):
+            logger.warning("BatchManager: Cancel requested but state is already %s.", self.lifecycle_state)
+            return
+
         self._is_cancelled = True
         self.lifecycle_state = "CANCELLING"
         logger.info("BatchManager: Cancellation requested.")
@@ -217,18 +248,30 @@ class BatchProcessingManager(QObject):
             self.elapsed_time_accumulated += (time.perf_counter() - self.run_start_time)
             self.run_start_time = 0.0
         
-        if self.active_worker and self.active_worker.isRunning():
-            # Signal cancellation — do NOT call .wait() here as it blocks the main thread
-            # and causes a UI freeze. The worker will finish on its own and emit finished.
+        if self.active_worker:
             self.active_worker.cancel()
         else:
             self._on_cancel_finished()
 
-    def _on_worker_thread_finished(self):
-        logger.info("BatchManager: Worker thread finished.")
+    @Slot()
+    def _on_thread_finished_cleanup(self):
+        logger.info("BatchManager: Host QThread finished. Performing cleanup.")
+        # Asynchronously clean up worker and thread references
+        if self.active_worker:
+            self.active_worker.deleteLater()
+            self.active_worker = None
+        if self.batch_thread:
+            self.batch_thread.deleteLater()
+            self.batch_thread = None
+            
+        self._destroying_worker_ref = None
+        self._on_cleanup_finished_callback = None
+        
+        # Finalize the run state transition
         if self._is_cancelled:
-            logger.info("BatchManager: Worker thread finished after cancellation request.")
             self._on_cancel_finished()
+        else:
+            self.finalize_batch()
 
     def _on_cancel_finished(self):
         self.lifecycle_state = "CANCELLED"
@@ -240,80 +283,24 @@ class BatchProcessingManager(QObject):
         self._batch_ready_for_new_run = True
         logger.info("BatchManager: Previous batch fully finalized. Ready for new batch.")
 
-    def analyze_next_image(self):
-        if self._is_cancelled:
-            return
-
-        # Deterministic worker lifecycle validation guards
-        if self.active_worker is not None:
-            logger.error("BatchManager: Lifecycle violation - active_worker is not None before starting next image.")
-            return
-        destroying_worker = getattr(self, "_destroying_worker_ref", None)
-        if destroying_worker is not None and destroying_worker() is not None:
-            logger.error("BatchManager: Lifecycle violation - previous worker is still destroying before starting next image.")
-            return
-        if getattr(self, "_on_cleanup_finished_callback", None) is not None:
-            logger.error("BatchManager: Lifecycle violation - pending cleanup callback exists before starting next image.")
+    @Slot(int, str, dict)
+    def _on_image_completed(self, token: int, image_path: str, results: dict):
+        if token != self.batch_token:
+            logger.warning("BatchManager: Discarding stale completed signal (expected token %d, got %d).", 
+                           self.batch_token, token)
             return
             
-        if self.current_idx >= len(self.image_paths):
-            self.finalize_batch()
-            return
-            
-        image_path = self.image_paths[self.current_idx]
-        image_name = Path(image_path).name
+        logger.info("BatchManager (token=%d): Worker completed image: %s", token, Path(image_path).name)
         
-        state.batch_status = f"Processing {self.current_idx + 1}/{len(self.image_paths)}: {image_name}"
-        progress_pct = int((self.current_idx / len(self.image_paths)) * 100)
-        state.batch_progress = progress_pct
-        self.batch_progress_updated.emit(self.completed_count, self.failed_count, image_name)
-        
-        self.image_start_time = time.time()
-        
-        # Resume-safe check: Check if expected outputs already exist
-        if self._check_existing_outputs(image_path):
-            logger.info("BatchManager: Skipping %s - Outputs already exist.", image_name)
-            parsed = self._parse_existing_outputs(image_path)
-            if parsed:
-                self.summary_records.append(parsed)
-                self.completed_count += 1
-                self.skipped_count += 1
-                self.current_idx += 1
-                
-                # Record skip runtime (very short)
-                duration = time.time() - self.image_start_time
-                self.image_runtimes.append(duration)
-                
-                QTimer.singleShot(0, self.analyze_next_image)
-                return
-            else:
-                logger.warning("BatchManager: Existing CSV parse failed for %s. Rerunning analysis.", image_name)
-
-        # Start AnalysisWorker background thread
-        worker_params = self.parameters.copy()
-        
-        logger.info("BatchManager: Creating and starting new worker for image %d/%d: %s", 
-                    self.current_idx + 1, len(self.image_paths), image_name)
-        self.active_worker = AnalysisWorker(image_path, worker_params)
-        self.active_worker.finished_successfully.connect(self._on_image_completed)
-        self.active_worker.failed.connect(self._on_image_failed, Qt.QueuedConnection)
-        self.active_worker.finished.connect(self._on_worker_thread_finished, Qt.QueuedConnection)
-        self.active_worker.start()
-
-    def _on_image_completed(self, results: dict):
-        """Called on the AnalysisWorker thread. Acts as a thin relay only.
-        
-        IMPORTANT: Do NOT perform any Qt GUI/render operations here (no QTextDocument,
-        QPdfWriter, QImage, QPixmap). This slot fires on the worker thread and using
-        Qt objects here causes a silent app crash.
-        
-        All output generation is delegated to _generate_outputs_on_main_thread() via
-        the _image_result_ready signal (QueuedConnection), which executes on the main thread.
-        """
-        image_path = self.image_paths[self.current_idx]
-        logger.info("BatchManager: Worker completed for %s — relaying to main thread for output generation.",
-                    Path(image_path).name)
-        self._image_result_ready.emit(image_path, results)
+        if results.get("status") == "SKIPPED_ALREADY_EXISTS":
+            # Rehydrate record for skipped image without saving duplicate files
+            self.summary_records.append(results)
+            self.completed_count += 1
+            self.skipped_count += 1
+            self._advance_batch_after_image()
+        else:
+            # Save results on main thread
+            self._generate_outputs_on_main_thread(image_path, results)
 
     def _generate_outputs_on_main_thread(self, image_path: str, results: dict):
         """Generates all file outputs (overlay PNG, label TIFF, CSV, PDF) on the main thread.
@@ -332,7 +319,7 @@ class BatchProcessingManager(QObject):
         except Exception as e:
             logger.error("BatchManager: Failed to create output folder for %s: %s", image_name, e)
             self._record_output_failure(image_name)
-            self._advance_batch()
+            self._advance_batch_after_image()
             return
 
         # Step 2: Write visual overlay PNG
@@ -415,7 +402,7 @@ class BatchProcessingManager(QObject):
         if "masks" in results:
             del results["masks"]
 
-        self._advance_batch()
+        self._advance_batch_after_image()
 
     def _record_output_failure(self, image_name: str):
         """Appends a FAILED summary record and increments the failure counter."""
@@ -423,25 +410,50 @@ class BatchProcessingManager(QObject):
         self.summary_records.append(record)
         self.failed_count += 1
 
-    def _advance_batch(self):
-        """Advances the batch loop index and schedules the next image or finalizes."""
+    def _advance_batch_after_image(self):
         duration = time.time() - self.image_start_time
         self.image_runtimes.append(duration)
-
+        
         self.current_idx += 1
-
-        if self._is_cancelled:
-            self._cleanup_active_worker(self._on_cancel_finished)
+        
+        # State transition guards based on state machine
+        if self.lifecycle_state == "CANCELLING":
+            # Wait for worker thread to exit and fire finished signal
+            if self.active_worker:
+                self.active_worker.mark_output_done()
+        elif self.lifecycle_state == "PAUSED":
+            # We don't advance the worker loop yet. The UI handles resume.
+            pass
         elif self._is_paused_requested:
-            self._cleanup_active_worker(self._on_pause_finished)
+            self.lifecycle_state = "PAUSED"
+            state.is_batch_active = False
+            if self.run_start_time > 0.0:
+                self.elapsed_time_accumulated += (time.perf_counter() - self.run_start_time)
+                self.run_start_time = 0.0
+            
+            # Request worker to pause (clear its pause event)
+            if self.active_worker:
+                self.active_worker.pause()
+                self.active_worker.mark_output_done()
+            
+            self.batch_paused.emit()
+            logger.info("BatchManager: Batch paused on image boundary.")
         elif self.current_idx >= len(self.image_paths):
-            self._cleanup_active_worker(self.finalize_batch)
+            # Normal end of batch. Unblock worker so it exits its run loop
+            if self.active_worker:
+                self.active_worker.mark_output_done()
         else:
-            self._cleanup_active_worker(self._on_ready_for_next_image)
-
-    def _on_ready_for_next_image(self):
-        logger.info("BatchManager: Ready for next image. Scheduling analyze_next_image.")
-        QTimer.singleShot(0, self.analyze_next_image)
+            # Advance to next image
+            image_path = self.image_paths[self.current_idx]
+            image_name = Path(image_path).name
+            state.batch_status = f"Processing {self.current_idx + 1}/{len(self.image_paths)}: {image_name}"
+            progress_pct = int((self.current_idx / len(self.image_paths)) * 100)
+            state.batch_progress = progress_pct
+            self.batch_progress_updated.emit(self.completed_count, self.failed_count, image_name)
+            
+            self.image_start_time = time.time()
+            if self.active_worker:
+                self.active_worker.mark_output_done()
 
     def _on_worker_destroyed(self):
         logger.info("BatchManager: Worker thread QObject destroyed.")
@@ -451,16 +463,31 @@ class BatchProcessingManager(QObject):
             self._on_cleanup_finished_callback = None
             QTimer.singleShot(0, callback)
 
-    def _on_image_failed(self, error_msg: str):
-        image_path = self.image_paths[self.current_idx]
+    @Slot(int, str, str)
+    def _on_image_failed(self, token: int, image_path: str, error_msg: str):
+        if token != self.batch_token:
+            logger.warning("BatchManager: Discarding stale failed signal (expected token %d, got %d).", 
+                           self.batch_token, token)
+            return
+            
         image_name = Path(image_path).name
-        logger.error("BatchManager: Analysis worker reported failure on %s: %s", image_name, error_msg)
+        logger.error("BatchManager (token=%d): Worker failed image %s: %s", token, image_name, error_msg)
         
         record = self._build_failed_record(image_name, f"FAILED: {error_msg}")
         self.summary_records.append(record)
-        
         self.failed_count += 1
-        self._advance_batch()
+        
+        self._advance_batch_after_image()
+
+    @Slot(int, str)
+    def _on_worker_status_updated(self, token: int, status: str):
+        if token != self.batch_token:
+            return
+        image_name = Path(self.image_paths[self.current_idx]).name if self.current_idx < len(self.image_paths) else ""
+        if image_name:
+            state.batch_status = f"Processing {self.current_idx + 1}/{len(self.image_paths)} ({image_name}): {status}"
+        else:
+            state.batch_status = f"Processing: {status}"
 
     def _build_failed_record(self, image_name: str, status_msg: str) -> dict:
         return {
@@ -592,7 +619,7 @@ class BatchProcessingManager(QObject):
                 f.write("====================================================\n")
                 f.write("          LUMEN BATCH ANALYSIS REPRODUCIBILITY METADATA\n")
                 f.write("====================================================\n")
-                f.write(f"Lumen Version: 0.1.0\n")
+                f.write(f"Lumen Version: 0.2.0\n")
                 f.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"Active Workflow: {state.current_workflow or 'Cell Counting'}\n")
                 f.write(f"Segmentation Method: {seg_method}\n")
@@ -700,6 +727,7 @@ class BatchProcessingManager(QObject):
     def resume_batch(self):
         """Resumes batch processing from current index."""
         if self.lifecycle_state != "PAUSED":
+            logger.warning("BatchManager: Resume requested but state is %s (expected PAUSED).", self.lifecycle_state)
             return
         logger.info("BatchManager: Resuming batch analysis.")
         self.lifecycle_state = "RUNNING"
@@ -710,7 +738,11 @@ class BatchProcessingManager(QObject):
         state.batch_status = f"Processing {self.current_idx + 1}/{len(self.image_paths)}"
         
         self.batch_resumed.emit()
-        QTimer.singleShot(0, self.analyze_next_image)
+        self.image_start_time = time.time()
+        
+        # Resume the worker
+        if self.active_worker:
+            self.active_worker.resume()
 
     def get_elapsed_seconds(self) -> float:
         """Returns elapsed run time in seconds."""
@@ -744,42 +776,59 @@ class BatchProcessingManager(QObject):
 
         self._on_cleanup_finished_callback = callback
         
-        logger.info("BatchManager: Performing safe worker thread cleanup.")
+        logger.info("BatchManager: Performing safe asynchronous worker thread cleanup.")
         worker = self.active_worker
+        thread = self.batch_thread
+        
         self.active_worker = None
+        self.batch_thread = None
         
         import weakref
-        self._destroying_worker_ref = weakref.ref(worker)
+        self._destroying_worker_ref = weakref.ref(worker) if worker else None
         
         try:
-            try:
-                worker.finished_successfully.disconnect()
-            except Exception:
-                pass
-            try:
-                worker.failed.disconnect()
-            except Exception:
-                pass
-            try:
-                worker.finished.disconnect()
-            except Exception:
-                pass
-            
-            worker.destroyed.connect(self._on_worker_destroyed)
-            
-            if worker.isRunning():
-                logger.info("BatchManager: Worker thread is still running. Requesting exit...")
-                worker.cancel()
-                worker.quit()
-                if not worker.wait(5000):
-                    logger.warning("BatchManager: Worker thread wait timed out. Terminating...")
-                    worker.terminate()
-                    worker.wait()
-            else:
-                worker.wait()
+            if worker:
+                try:
+                    worker.image_completed.disconnect()
+                except Exception:
+                    pass
+                try:
+                    worker.image_failed.disconnect()
+                except Exception:
+                    pass
+                try:
+                    worker.status_updated.disconnect()
+                except Exception:
+                    pass
+                try:
+                    worker.finished.disconnect()
+                except Exception:
+                    pass
                 
-            logger.info("BatchManager: Worker thread joined successfully. Calling deleteLater.")
-            worker.deleteLater()
+                # Connect worker destroyed to final clean callback trigger
+                worker.destroyed.connect(self._on_worker_destroyed)
+                worker.cancel()
+                
+            if thread:
+                try:
+                    thread.finished.disconnect()
+                except Exception:
+                    pass
+                
+                # Quit the thread asynchronously (no wait() on the GUI thread)
+                if thread.isRunning():
+                    thread.quit()
+                    # Delete the thread when it exits
+                    thread.finished.connect(thread.deleteLater)
+                else:
+                    thread.deleteLater()
+                    
+            if worker:
+                worker.deleteLater()
+            else:
+                if callback:
+                    self._on_cleanup_finished_callback = None
+                    QTimer.singleShot(0, callback)
         except Exception as e:
             logger.error("BatchManager: Exception during worker cleanup: %s", e)
             self._destroying_worker_ref = None
@@ -789,7 +838,7 @@ class BatchProcessingManager(QObject):
     def _harden_lifecycle_reset(self):
         logger.info("BatchManager: Performing lifecycle sanitation pass.")
         # 1. Clean up active worker if exists
-        if self.active_worker:
+        if self.active_worker or self.batch_thread:
             logger.info("BatchManager: Active worker exists during reset, cleaning up.")
             self._cleanup_active_worker()
             
@@ -797,14 +846,7 @@ class BatchProcessingManager(QObject):
         destroying_worker = getattr(self, "_destroying_worker_ref", None)
         if destroying_worker is not None and destroying_worker() is not None:
             worker = destroying_worker()
-            logger.info("BatchManager: Lingering destroying worker found, waiting for join.")
-            try:
-                if worker.isRunning():
-                    worker.cancel()
-                    worker.quit()
-                    worker.wait(2000)
-            except Exception as e:
-                logger.error("BatchManager: Error joining destroying worker: %s", e)
+            logger.info("BatchManager: Lingering destroying worker found, waiting for destruction.")
 
         # 3. Use local event-loop flush only as a timeout/fallback safety path if destruction stalls
         destroying_worker = getattr(self, "_destroying_worker_ref", None)

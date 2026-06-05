@@ -18,7 +18,7 @@ def start_app():
 
     app = QApplication(sys.argv)
     app.setApplicationName("Lumen")
-    app.setApplicationVersion("0.1.0")
+    app.setApplicationVersion("0.2.0")
     app.setOrganizationName("Lumen Biological")
 
     # Apply style theme (load stylesheet)

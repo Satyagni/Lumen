@@ -22,12 +22,12 @@ Modern biological research generates massive amounts of microscopy imaging data 
 
 ## Core Features (v0.2.0)
 
-### 🔬 Deep Learning & Image Handling
+### Deep Learning & Image Handling
 - **Cellpose-Powered Microscopy Segmentation**: Native integration with local Cellpose v3.0+ deep learning model evaluations.
 - **Intelligent Modality & Routing**: Automatically inspects file metadata and pixel arrays on import to determine imaging modality (e.g., *Fluorescence Microscopy*, *Brightfield Microscopy*) and routes them to DAPI nuclei stains (`nuclei` model) or GFP cell bodies (`cyto` model).
 - **16-bit to 8-bit Normalization**: scales 16-bit high-dynamic-range TIFF microscopy images down to 8-bit display buffers using **1st/99th percentile contrast-stretching** with division-by-zero safeguards.
 
-### 🖼️ Analysis & Workspace
+### Analysis & Workspace
 - **Single Image Analysis**: Perform profiling, model inference, and metadata inspection for individual microscopy images.
 - **Interactive Viewer & Tooltips**: Features a zoomable, pannable graphics canvas custom-tailored for large biological image inspection with adjustable opacity mask overlays. Single-clicking any segmented cell displays quantitative dimensions (Cell ID, Area, Diameter, and Centroid) via hovering tooltips.
 - **Manual Segmentation / Mask Editing**: Allows vector-drawn interactive mask editing. Researchers can manually add, delete, or merge cells directly on the visual canvas.
@@ -35,7 +35,7 @@ Modern biological research generates massive amounts of microscopy imaging data 
 - **Save Analysis / Save to Batch**: Fully integrated saving workflow supporting custom modifications on batch images.
 - **Reanalysis Support**: Detects dirty state during scientific reanalysis, prompting users to re-run or commit changes.
 
-### 📦 Batch Pipeline & Results Explorer
+### Batch Pipeline & Results Explorer
 - **Batch Folder Processing**: Scan folders recursively or flat for sequential batch processing of microscopy images.
 - **Background Batch Execution**: Executes Cellpose inference on background threads, keeping the main GUI responsive.
 - **Pause / Resume / Cancel**: Enforces strict lifecycle state machines allowing users to pause, resume, or cancel batch executions at any time.

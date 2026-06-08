@@ -570,8 +570,14 @@ class UploadPage(QWidget):
         w_lbl.setStyleSheet("font-size: 11px; color: #9CA3AF; font-weight: bold; text-transform: uppercase;")
         self.batch_workflow_combo = QComboBox()
         self.batch_workflow_combo.addItem("Cell Segmentation", "cell_counting")
-        self.batch_workflow_combo.addItem("Fluorescence Analysis", "fluorescence")
+        self.batch_workflow_combo.addItem("Fluorescence Analysis (Disabled - Single Image Only)", "fluorescence")
         self.batch_workflow_combo.setCursor(QCursor(Qt.PointingHandCursor))
+        # Disable the Fluorescence Analysis item
+        model = self.batch_workflow_combo.model()
+        if model:
+            item = model.item(1)
+            if item:
+                item.setEnabled(False)
         config_grid.addWidget(w_lbl, 2, 0)
         config_grid.addWidget(self.batch_workflow_combo, 2, 1)
 
@@ -741,9 +747,27 @@ class UploadPage(QWidget):
         self.recs_panel.setVisible(True)
         self.reset_btn.setVisible(True)
 
-        self._build_recommendation_cards(meta["recommended_workflows"])
+        recs = list(meta["recommended_workflows"])
+        # If state.current_workflow is set (e.g. intentionally from Home card),
+        # make sure it is present in the recommendation cards so it can be selected.
+        if state.current_workflow and not any(wf["id"] == state.current_workflow for wf in recs):
+            if state.current_workflow == "fluorescence":
+                recs.append({
+                    "id": "fluorescence",
+                    "name": "Fluorescence Analysis",
+                    "desc": "Quantify signal intensity profiles across color channels.",
+                    "relevance": "High"
+                })
+            elif state.current_workflow == "cell_counting":
+                recs.append({
+                    "id": "cell_counting",
+                    "name": "Cell Segmentation",
+                    "desc": "Detect and segment cells or nuclei.",
+                    "relevance": "High"
+                })
+
+        self._build_recommendation_cards(recs)
         
-        recs = meta["recommended_workflows"]
         default_wf = recs[0]["id"] if recs else None
         if recs and state.current_workflow in [wf["id"] for wf in recs]:
             default_wf = state.current_workflow
@@ -850,15 +874,6 @@ class UploadPage(QWidget):
         self._update_batch_estimation()
 
     def _on_batch_workflow_changed(self, index: int):
-        selected_workflow = self.batch_workflow_combo.currentData()
-        if selected_workflow == "fluorescence":
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.information(
-                self,
-                "Pipeline Under Development",
-                "Fluorescence analysis workflow coming soon.",
-                QMessageBox.Ok
-            )
         self._update_batch_estimation()
 
     def _update_batch_estimation(self):
@@ -1135,5 +1150,7 @@ class UploadPage(QWidget):
         super().showEvent(event)
         if state.current_workflow:
             idx = self.batch_workflow_combo.findData(state.current_workflow)
-            if idx >= 0:
+            if idx == 0:
                 self.batch_workflow_combo.setCurrentIndex(idx)
+            else:
+                self.batch_workflow_combo.setCurrentIndex(0)

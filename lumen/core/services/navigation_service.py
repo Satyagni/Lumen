@@ -30,6 +30,15 @@ class NavigationService:
             logger.info("NavigationService: Redirecting 'upload' request to 'batch_progress' due to active batch state (%s)", batch_manager.lifecycle_state)
             page_name = "batch_progress"
 
+        # Handle workflow state synchronization for upload page
+        if page_name == "upload":
+            if getattr(state, "_intentional_workflow", False):
+                # Clear the flag since we are handling it now
+                state._intentional_workflow = False
+            else:
+                # Reset workflow state to neutral to avoid leakage/stale state
+                state.current_workflow = None
+
         # Intercept transitions away from the analysis page if state.is_dirty is True
         if state.current_page == "analysis" and page_name != "analysis" and state.is_dirty:
             state.revert_to_last_committed_state()

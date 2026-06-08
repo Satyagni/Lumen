@@ -20,7 +20,11 @@ class ImageManager:
         self._cached_metadata: Dict[str, Any] = {}
         self._thumbnail_cache: Dict[str, QPixmap] = {}
         self._raw_numpy_arr: Optional[np.ndarray] = None
+        self._raw_channels = []
+        self._active_channel_idx = -1
+        self._channel_names = []
         logger.info("ImageManager initialized.")
+
 
     def is_valid_file(self, file_path: str) -> bool:
         """Validates if a file extension is supported."""
@@ -30,6 +34,7 @@ class ImageManager:
         return ext in ALLOWED_EXTENSIONS
 
     def load_image(self, file_path: str, set_state: bool = True) -> Tuple[bool, str]:
+
         """Validates, loads, extracts metadata, and updates central state for an image."""
         if not file_path:
             return False, "Empty file path provided."
@@ -65,13 +70,22 @@ class ImageManager:
             if not isinstance(raw_arr, np.ndarray) or raw_arr.size == 0:
                 return False, "Failed to load image into a valid NumPy array."
 
+            # Transpose (C, H, W) to (H, W, C) if first dimension represents channels
+            ndim = raw_arr.ndim
+            if ndim == 3:
+                # Heuristic: normally height/width are large, channels C <= 10
+                if raw_arr.shape[0] <= 10 and raw_arr.shape[2] > 10:
+                    raw_arr = np.transpose(raw_arr, (1, 2, 0))
+
             # Determine channels and mode from array shape
             shape = raw_arr.shape
-            height, width = shape[0], shape[1]
-            if len(shape) == 2:
+            if ndim == 2:
+                height, width = shape[0], shape[1]
                 channels = 1
                 mode = "grayscale"
-            elif len(shape) == 3:
+                self._raw_channels = [raw_arr]
+            elif ndim == 3:
+                height, width = shape[0], shape[1]
                 channels = shape[2]
                 if channels in [3, 4]:
                     mode = "rgb"
@@ -79,11 +93,14 @@ class ImageManager:
                     mode = "grayscale"
                     raw_arr = raw_arr[..., 0]  # squeeze to 2D
                     channels = 1
+                    self._raw_channels = [raw_arr]
                 else:
-                    # multi-spectral / other formats: default to grayscale preview of first channel
                     mode = "rgb" if channels >= 3 else "grayscale"
+                
+                if channels > 1:
+                    self._raw_channels = [raw_arr[..., c] for c in range(channels)]
             else:
-                return False, f"Unsupported image array dimensions: {len(shape)}"
+                return False, f"Unsupported image array dimensions: {ndim}"
 
             bit_depth = raw_arr.dtype.itemsize * 8
             file_size_kb = os.path.getsize(file_path) / 1024
@@ -92,21 +109,21 @@ class ImageManager:
             from lumen.workflows.image_classifier import classify_image
             classification_data = classify_image(filename, channels, mode, img_format)
 
-            # Convert raw array to raw QImage
-            qimage_raw = self._numpy_to_qimage(raw_arr)
-            if qimage_raw.isNull():
-                return False, "Failed to convert raw NumPy array to QImage."
+            # Initialize active channel index: composite (-1) if multi-channel, else 0
+            self._active_channel_idx = -1 if channels > 1 else 0
 
-            # Apply display normalization for visualization
-            display_arr = self._normalize_display_array(raw_arr)
-            qimage_display = self._numpy_to_qimage(display_arr)
-            if qimage_display.isNull():
-                return False, "Failed to convert normalized NumPy array to QImage."
+            # Dynamic Channel Naming registry
+            from lumen.core.fluorescence.channels import get_default_channel_names
+            self._channel_names = get_default_channel_names(channels, filename)
+
+            # Generate cached display images
+            self._update_cached_images()
+
+            if self._cached_qimage.isNull() or self._cached_display_qimage.isNull():
+                return False, "Failed to build QImage from loaded image."
 
             self._current_path = file_path
             self._raw_numpy_arr = raw_arr
-            self._cached_qimage = qimage_raw
-            self._cached_display_qimage = qimage_display
             self._cached_metadata = {
                 "filename": filename,
                 "path": file_path,
@@ -130,7 +147,10 @@ class ImageManager:
             # Alert state manager
             if set_state:
                 state.current_image_path = file_path
+                state.channel_names = self._channel_names
+                state.active_viewer_channel = self._active_channel_idx
             return True, "Successfully loaded image."
+
 
         except Exception as e:
             msg = f"Image loading exception: {str(e)}"
@@ -184,7 +204,11 @@ class ImageManager:
         self._cached_display_qimage = None
         self._cached_metadata = {}
         self._thumbnail_cache.clear()
+        self._raw_channels = []
+        self._active_channel_idx = -1
+        self._channel_names = []
         logger.debug("ImageManager cache cleared.")
+
 
     def _numpy_to_qimage(self, arr: np.ndarray) -> QImage:
         """Converts a numpy array to a QImage, making a deep copy to decouple memory buffers."""
@@ -268,5 +292,144 @@ class ImageManager:
 
         return arr.astype(np.uint8)
 
+    def get_channel_data(self, channel_idx: int) -> Optional[np.ndarray]:
+        """Returns the 2D raw NumPy array for the specified channel index."""
+        if not self._raw_channels or channel_idx < 0 or channel_idx >= len(self._raw_channels):
+            return None
+        return self._raw_channels[channel_idx]
+
+    def set_active_channel(self, channel_idx: int):
+        """Sets the active display channel (-1 for composite) and updates cached display images."""
+        if not self._raw_channels:
+            return
+        if channel_idx < -1 or channel_idx >= len(self._raw_channels):
+            return
+        self._active_channel_idx = channel_idx
+        self._update_cached_images()
+
+    def _update_cached_images(self):
+        """Re-generates self._cached_qimage and self._cached_display_qimage based on active channel selection and preprocessing."""
+        if not self._raw_channels:
+            return
+
+        # Determine active view mode
+        if self._active_channel_idx == -1 and len(self._raw_channels) > 1:
+            # Composite View
+            composite_arr = self._generate_composite_array()
+            self._cached_qimage = self._numpy_to_qimage(composite_arr)
+            self._cached_display_qimage = self._numpy_to_qimage(composite_arr)
+        else:
+            # Single Channel View
+            idx = max(0, self._active_channel_idx)
+            chan_arr = self._raw_channels[idx]
+            preprocessed_arr = self.preprocess_array(chan_arr)
+            self._cached_qimage = self._numpy_to_qimage(chan_arr)
+            self._cached_display_qimage = self._numpy_to_qimage(preprocessed_arr)
+
+    def _generate_composite_array(self) -> np.ndarray:
+        """Generates a composite RGB uint8 array from all available channels mapped to their active colors."""
+        if not self._raw_channels:
+            return np.zeros((100, 100, 3), dtype=np.uint8)
+
+        h, w = self._raw_channels[0].shape[:2]
+        composite = np.zeros((h, w, 3), dtype=np.float32)
+
+        # Default fallback channel mapping colors (DAPI -> Blue, GFP -> Green, RFP -> Red, etc.)
+        default_rgb_vectors = [
+            [0.0, 0.0, 1.0],  # Blue
+            [0.0, 1.0, 0.0],  # Green
+            [1.0, 0.0, 0.0],  # Red
+            [1.0, 1.0, 0.0],  # Yellow
+            [0.0, 1.0, 1.0],  # Cyan
+            [1.0, 0.0, 1.0],  # Magenta
+        ]
+
+        channel_names = []
+        if hasattr(state, "current_image_path") and state.current_image_path == self._current_path:
+            channel_names = state.channel_names
+        if not channel_names and hasattr(self, "_channel_names"):
+            channel_names = self._channel_names
+
+        for idx, chan in enumerate(self._raw_channels):
+            color_vec = default_rgb_vectors[idx % len(default_rgb_vectors)]
+            if idx < len(channel_names):
+                name = str(channel_names[idx]).lower()
+                if any(kw in name for kw in ["dapi", "hoechst", "blue", "nuc"]):
+                    color_vec = [0.0, 0.0, 1.0]
+                elif any(kw in name for kw in ["gfp", "green", "fitc", "alexa488"]):
+                    color_vec = [0.0, 1.0, 0.0]
+                elif any(kw in name for kw in ["rfp", "red", "tritc", "cy5", "alexa594"]):
+                    color_vec = [1.0, 0.0, 0.0]
+
+            # Normalize channel to 0.0 - 1.0
+            norm_chan = self._normalize_channel_to_float(chan)
+
+            for c in range(3):
+                composite[..., c] += norm_chan * color_vec[c]
+
+        composite = np.clip(composite, 0.0, 1.0) * 255.0
+        return composite.astype(np.uint8)
+
+    def _normalize_channel_to_float(self, arr: np.ndarray) -> np.ndarray:
+        """Normalizes raw channel numpy array to a 0.0 - 1.0 range float32 representation incorporating preprocessing."""
+        preprocessed_uint8 = self.preprocess_array(arr)
+        return preprocessed_uint8.astype(np.float32) / 255.0
+
+    def preprocess_array(self, arr: np.ndarray) -> np.ndarray:
+        """Applies non-destructive preprocessing pipeline (auto contrast, percentile stretch, brightness, contrast, gamma) to the array, returning a uint8 representation."""
+        if arr is None:
+            return None
+            
+        # Import state locally to avoid circular dependency
+        from lumen.workflows.state import state
+        
+        auto_contrast = getattr(state, "preprocess_auto_contrast", True)
+        p_low = getattr(state, "preprocess_percentile_low", 1.0)
+        p_high = getattr(state, "preprocess_percentile_high", 99.0)
+        brightness = getattr(state, "preprocess_brightness", 0.0)
+        contrast = getattr(state, "preprocess_contrast", 1.0)
+        gamma = getattr(state, "preprocess_gamma", 1.0)
+        
+        # 1. Convert to float32
+        img = arr.astype(np.float32)
+        
+        if auto_contrast:
+            # Percentile stretch
+            p_l = np.percentile(img, p_low)
+            p_h = np.percentile(img, p_high)
+            if p_h > p_l:
+                img = np.clip((img - p_l) / (p_h - p_l), 0.0, 1.0)
+            else:
+                # Fallback to min/max
+                amin = np.min(img)
+                amax = np.max(img)
+                if amax > amin:
+                    img = np.clip((img - amin) / (amax - amin), 0.0, 1.0)
+                else:
+                    img = np.zeros_like(img)
+        else:
+            # Determine maximum value based on data type to normalize to [0.0, 1.0] without stretching
+            if np.issubdtype(arr.dtype, np.integer):
+                max_val = float(np.iinfo(arr.dtype).max)
+            else:
+                max_val = 1.0
+            img = np.clip(img / max_val, 0.0, 1.0)
+                
+        # 2. Contrast adjustment (midpoint 0.5)
+        if contrast != 1.0:
+            img = np.clip((img - 0.5) * contrast + 0.5, 0.0, 1.0)
+            
+        # 3. Brightness adjustment
+        if brightness != 0.0:
+            img = np.clip(img + brightness, 0.0, 1.0)
+            
+        # 4. Gamma correction
+        if gamma != 1.0:
+            img = np.clip(img, 1e-8, 1.0)
+            img = np.power(img, gamma)
+            
+        return (img * 255.0).astype(np.uint8)
+
 # Instantiate global image manager
 image_manager = ImageManager()
+

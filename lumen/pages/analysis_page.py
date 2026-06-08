@@ -634,8 +634,8 @@ class AnalysisPage(QWidget):
         # 3. Right Panel: Workflow outlines / action controls
         self.right_panel = QFrame()
         self.right_panel.setObjectName("AnalysisRightPanel")
-        self.right_panel.setMinimumWidth(220)
-        self.right_panel.setMaximumWidth(500)
+        self.right_panel.setMinimumWidth(300)
+        self.right_panel.setMaximumWidth(350)
         self.right_panel.setStyleSheet("""
             #AnalysisRightPanel {
                 background-color: #1C1C22;
@@ -690,14 +690,22 @@ class AnalysisPage(QWidget):
                 padding: 8px;
             }
         """)
-        banner_layout = QHBoxLayout(self.banner_frame)
+        banner_layout = QVBoxLayout(self.banner_frame)
         banner_layout.setContentsMargins(6, 6, 6, 6)
+        banner_layout.setSpacing(6)
         self.banner_lbl = QLabel("Fluorescence workflow coming soon — using segmentation workspace.")
         self.banner_lbl.setStyleSheet("color: #E0E7FF; font-size: 11px; font-weight: 500;")
         self.banner_lbl.setWordWrap(True)
         banner_layout.addWidget(self.banner_lbl)
+
+        from lumen.ui.fluorescence_panel import FluorescencePanel
+        self.fluorescence_panel = FluorescencePanel(self.banner_frame)
+        banner_layout.addWidget(self.fluorescence_panel)
+        self.fluorescence_panel.hide()
+
         scroll_layout.addWidget(self.banner_frame)
         self.banner_frame.setVisible(False)
+
 
         # Steps log (not stretching, set to factor 0)
         self.steps_container = QFrame()
@@ -766,6 +774,26 @@ class AnalysisPage(QWidget):
         seg_layout.addWidget(self.quality_frame)
         
         scroll_layout.addWidget(self.segmentation_panel)
+        
+        # Preprocessing Panel card container
+        self.preprocess_container = QFrame()
+        self.preprocess_container.setObjectName("PreprocessingContainer")
+        self.preprocess_container.setStyleSheet("""
+            #PreprocessingContainer {
+                background-color: #17171C;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
+                padding: 12px;
+            }
+        """)
+        preprocess_card_layout = QVBoxLayout(self.preprocess_container)
+        preprocess_card_layout.setContentsMargins(6, 6, 6, 6)
+        
+        from lumen.ui.preprocessing_panel import PreprocessingPanel
+        self.preprocess_panel = PreprocessingPanel(self.preprocess_container)
+        preprocess_card_layout.addWidget(self.preprocess_panel)
+        
+        scroll_layout.addWidget(self.preprocess_container)
         
         scroll_layout.addStretch(1)
 
@@ -836,7 +864,7 @@ class AnalysisPage(QWidget):
         self.right_splitter.setStretchFactor(1, 0)
         self.right_splitter.setCollapsible(0, False)
         self.right_splitter.setCollapsible(1, False)
-        self.right_splitter.setSizes([800, 260])
+        self.right_splitter.setSizes([750, 300])
         
         self.main_layout.addWidget(self.right_splitter, 1)
         self.page_layout.addLayout(self.main_layout, 1)
@@ -1065,8 +1093,14 @@ class AnalysisPage(QWidget):
                 self.run_btn.setEnabled(True)
                 self.run_btn.setCursor(QCursor(Qt.PointingHandCursor))
                 
-                if session.current_workflow:
+                if state.current_workflow:
+                    self._on_workflow_selected(state.current_workflow)
+                elif session.current_workflow:
                     self._on_workflow_selected(session.current_workflow)
+                    
+                # Synchronize Preprocessing Panel sliders with state
+                if hasattr(self, "preprocess_panel"):
+                    self.preprocess_panel.sync_from_state()
                     
                 self.model_combo.blockSignals(True)
                 self.model_combo.setCurrentText(state.segmentation_model)
@@ -1209,6 +1243,29 @@ class AnalysisPage(QWidget):
 
         # Toggle warning banner based on workflow mode
         self.banner_frame.setVisible(wf_id == "fluorescence")
+        if wf_id == "fluorescence":
+            self.banner_lbl.hide()
+            self.fluorescence_panel.show()
+            self.banner_frame.setStyleSheet("""
+                #WorkflowBannerFrame {
+                    background-color: #17171C;
+                    border: 1px solid rgba(255, 255, 255, 0.06);
+                    border-radius: 8px;
+                    padding: 12px;
+                }
+            """)
+        else:
+            self.banner_lbl.show()
+            self.fluorescence_panel.hide()
+            self.banner_frame.setStyleSheet("""
+                #WorkflowBannerFrame {
+                    background-color: #3730A3;
+                    border: 1px solid #4338CA;
+                    border-radius: 4px;
+                    padding: 8px;
+                }
+            """)
+
 
         wf = workflow_manager.get_workflow(wf_id)
         if wf:

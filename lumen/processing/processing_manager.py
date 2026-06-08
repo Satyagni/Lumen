@@ -47,7 +47,11 @@ class AnalysisWorker(QThread):
             if raw_arr is None or raw_arr.size == 0:
                 raise ValueError("Could not access or load raw image array.")
 
+            if raw_arr.ndim == 3 and raw_arr.shape[0] <= 10 and raw_arr.shape[2] > 10:
+                raw_arr = np.transpose(raw_arr, (1, 2, 0))
+
             self.progress_updated.emit(20)
+
             
             # Step 2: Heuristic routing
             # Retrieve metadata or compute it locally to avoid stale singleton cache reads
@@ -127,18 +131,35 @@ class AnalysisWorker(QThread):
             
             # Step 4: Execute Cellpose safely
             self.status_updated.emit("Executing Cellpose segmentation (inference)...")
+            
+            # Select active channel slice if in fluorescence workflow
+            from lumen.workflows.state import state
+            input_arr = raw_arr
+            eval_channels = channels
+            if state.current_workflow == "fluorescence" and raw_arr.ndim == 3:
+                seg_channel_idx = state.segmentation_channel
+                if seg_channel_idx >= 0 and seg_channel_idx < raw_arr.shape[2]:
+                    input_arr = raw_arr[..., seg_channel_idx]
+                    eval_channels = [0, 0] # Grayscale eval for single 2D slice
+                    logger.info("AnalysisWorker: Fluorescence mode active. Segmenting channel index %d as grayscale.", seg_channel_idx)
+
+            # Apply non-destructive preprocessing pipeline to segmentation input
+            from lumen.processing.image_manager import image_manager
+            input_arr = image_manager.preprocess_array(input_arr)
+
             logger.info("AnalysisWorker: Running model.eval on model_type='%s', gpu=%s, channels=%s, flow_threshold=%s, cellprob_threshold=%s, resample=%s", 
-                        model_type, use_gpu, channels, flow_threshold, cellprob_threshold, resample)
+                        model_type, use_gpu, eval_channels, flow_threshold, cellprob_threshold, resample)
             
             start_time = time.time()
             masks, flows, styles, diams = model.eval(
-                raw_arr,
-                channels=channels,
+                input_arr,
+                channels=eval_channels,
                 flow_threshold=flow_threshold,
                 cellprob_threshold=cellprob_threshold,
                 resample=resample,
                 diameter=diameter
             )
+
             elapsed = time.time() - start_time
             
             if self._is_cancelled:
@@ -469,7 +490,11 @@ class BatchAnalysisWorker(QObject):
                 if raw_arr is None or raw_arr.size == 0:
                     raise ValueError("Could not access or load raw image array.")
 
+                if raw_arr.ndim == 3 and raw_arr.shape[0] <= 10 and raw_arr.shape[2] > 10:
+                    raw_arr = np.transpose(raw_arr, (1, 2, 0))
+
                 self.progress_updated.emit(self.batch_token, 20)
+
                 
                 # Step 2: Heuristic routing
                 if image_manager._current_path == image_path:
@@ -550,18 +575,35 @@ class BatchAnalysisWorker(QObject):
                 self.status_updated.emit(self.batch_token, "Running image preprocessing...")
                 
                 self.status_updated.emit(self.batch_token, "Executing Cellpose segmentation...")
+
+                # Select active channel slice if in fluorescence workflow
+                from lumen.workflows.state import state
+                input_arr = raw_arr
+                eval_channels = channels
+                if state.current_workflow == "fluorescence" and raw_arr.ndim == 3:
+                    seg_channel_idx = state.segmentation_channel
+                    if seg_channel_idx >= 0 and seg_channel_idx < raw_arr.shape[2]:
+                        input_arr = raw_arr[..., seg_channel_idx]
+                        eval_channels = [0, 0] # Grayscale eval for single 2D slice
+                        logger.info("BatchAnalysisWorker: Fluorescence mode active. Segmenting channel index %d as grayscale.", seg_channel_idx)
+
+                # Apply non-destructive preprocessing pipeline to segmentation input
+                from lumen.processing.image_manager import image_manager
+                input_arr = image_manager.preprocess_array(input_arr)
+
                 logger.info("BatchAnalysisWorker (token=%d): Running model.eval on model_type='%s', gpu=%s", 
                             self.batch_token, model_type, use_gpu)
                 
                 start_time = time.time()
                 masks, flows, styles, diams = model_cache.eval(
-                    raw_arr,
-                    channels=channels,
+                    input_arr,
+                    channels=eval_channels,
                     flow_threshold=flow_threshold,
                     cellprob_threshold=cellprob_threshold,
                     resample=resample,
                     diameter=diameter
                 )
+
                 elapsed = time.time() - start_time
                 
                 if self._cancel_event.is_set():

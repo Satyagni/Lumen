@@ -250,7 +250,7 @@ class HomePage(QWidget):
 
         self.cards = [
             QuickActionCard("cell_counting", "Cell Segmentation", "Detect, segment, and quantify cells or nuclei in biological images.", "🧫", coming_soon=False, disabled=False, parent=self),
-            QuickActionCard("fluorescence", "Fluorescence Analysis", "Measure channel-specific signal intensity profiles.", "🧬", coming_soon=True, disabled=False, parent=self),
+            QuickActionCard("fluorescence", "Fluorescence Analysis", "Measure channel-specific signal intensity profiles.", "🧬", coming_soon=False, disabled=False, parent=self),
             QuickActionCard("colony", "Colony Analysis", "Detect and analyze agar plate bacterial culture colonies.", "🧫", coming_soon=True, disabled=True, parent=self),
             QuickActionCard("custom", "Custom Workflow", "Chain custom biological pre-processing pipeline blocks.", "⚙️", coming_soon=True, disabled=True, parent=self)
         ]
@@ -358,13 +358,9 @@ class HomePage(QWidget):
             self._load_recent_files()
 
     def _on_card_clicked(self, workflow_id: str):
-        if workflow_id == "fluorescence":
-            # Redirect to Cell Segmentation (which is cell_counting) but set workflow to fluorescence
-            state.current_workflow = "fluorescence"
-            navigation_service.navigate_to("upload")
-        else:
-            state.current_workflow = workflow_id
-            navigation_service.navigate_to("upload")
+        state._intentional_workflow = True
+        state.current_workflow = workflow_id
+        navigation_service.navigate_to("upload")
 
     def _on_recent_item_clicked(self, item):
         path = item.text()

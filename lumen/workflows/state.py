@@ -19,6 +19,25 @@ class AnalysisSession:
         self.segmentation_model = "Auto"
         self.current_workflow = None
         self.viewer_state = None  # Dict of {transform, h_scroll, v_scroll, initial_fit_scale, zoom_touched}
+        
+        # Fluorescence session attributes
+        self.channel_names = []
+        self.segmentation_channel = 0
+        self.active_viewer_channel = -1
+        self.background_mode = "None"
+        self.background_params = {"offset": 2, "thickness": 4}
+        self.fluorescence_results = {}
+        self.heatmap_cache = {}
+        self.active_metric = "mean"
+        
+        # Preprocessing session attributes
+        self.preprocess_auto_contrast = True
+        self.preprocess_percentile_low = 1.0
+        self.preprocess_percentile_high = 99.0
+        self.preprocess_brightness = 0.0
+        self.preprocess_contrast = 1.0
+        self.preprocess_gamma = 1.0
+
 
 class BatchResultSession:
     """Stores persistent state for a specific batch explorer session."""
@@ -166,6 +185,15 @@ class AppState(QObject):
     segmentation_model_changed = Signal(str)
     dirty_state_changed = Signal(bool)
 
+    # Fluorescence Signals
+    channel_names_changed = Signal(list)
+    segmentation_channel_changed = Signal(int)
+    active_viewer_channel_changed = Signal(int)
+    background_correction_changed = Signal()
+
+    # Preprocessing Signals
+    preprocessing_changed = Signal()
+
     def __init__(self):
         super().__init__()
         # Workspace Session Manager
@@ -194,6 +222,25 @@ class AppState(QObject):
 
         # Segmentation Settings
         self._segmentation_method = "AI Segmentation"
+
+        # Fluorescence State Caching
+        self._channel_names = []
+        self._segmentation_channel = 0
+        self._active_viewer_channel = -1
+        self._background_mode = "None"
+        self._background_params = {"offset": 2, "thickness": 4}
+        self._fluorescence_results = {}
+        self._heatmap_cache = {}
+        self._active_metric = "mean"
+
+        # Preprocessing State Caching
+        self._preprocess_auto_contrast = True
+        self._preprocess_percentile_low = 1.0
+        self._preprocess_percentile_high = 99.0
+        self._preprocess_brightness = 0.0
+        self._preprocess_contrast = 1.0
+        self._preprocess_gamma = 1.0
+
 
     # Getters and Setters with Logging and Signaling
 
@@ -249,12 +296,20 @@ class AppState(QObject):
 
     @property
     def current_workflow(self) -> str:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session and session.current_workflow:
+                return session.current_workflow
         return self._current_workflow
 
     @current_workflow.setter
     def current_workflow(self, workflow_name: str):
         if self._current_workflow != workflow_name:
             self._current_workflow = workflow_name
+            if self._current_image_path:
+                session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+                if session:
+                    session.current_workflow = workflow_name
             logger.info("AppState: workflow selected: %s", workflow_name)
             self.workflow_selected.emit(workflow_name or "")
 
@@ -475,6 +530,24 @@ class AppState(QObject):
         
         self._segmentation_method = "AI Segmentation"
         
+        # Reset fluorescence transient parameters
+        self._channel_names = []
+        self._segmentation_channel = 0
+        self._active_viewer_channel = -1
+        self._background_mode = "None"
+        self._background_params = {"offset": 2, "thickness": 4}
+        self._fluorescence_results = {}
+        self._heatmap_cache = {}
+        self._active_metric = "mean"
+
+        # Reset preprocessing transient parameters
+        self._preprocess_auto_contrast = True
+        self._preprocess_percentile_low = 1.0
+        self._preprocess_percentile_high = 99.0
+        self._preprocess_brightness = 0.0
+        self._preprocess_contrast = 1.0
+        self._preprocess_gamma = 1.0
+
         # Clear workspace manager session as well
         self.workspace_manager.reset_analysis_session()
         
@@ -483,7 +556,251 @@ class AppState(QObject):
         self.show_original_changed.emit(True)
         self.show_overlay_changed.emit(True)
         self.segmentation_method_changed.emit("AI Segmentation")
+        
+        # Emit fluorescence updates
+        self.channel_names_changed.emit([])
+        self.segmentation_channel_changed.emit(0)
+        self.active_viewer_channel_changed.emit(-1)
+        self.background_correction_changed.emit()
+
+        self.preprocessing_changed.emit()
         self.analysis_completed.emit({})
+
+    @property
+    def channel_names(self) -> list:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                return session.channel_names
+        return self._channel_names
+
+    @channel_names.setter
+    def channel_names(self, val: list):
+        self._channel_names = val
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                session.channel_names = val
+        self.channel_names_changed.emit(val)
+
+    @property
+    def segmentation_channel(self) -> int:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                return session.segmentation_channel
+        return self._segmentation_channel
+
+    @segmentation_channel.setter
+    def segmentation_channel(self, val: int):
+        self._segmentation_channel = val
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                session.segmentation_channel = val
+        self.segmentation_channel_changed.emit(val)
+
+    @property
+    def active_viewer_channel(self) -> int:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                return session.active_viewer_channel
+        return self._active_viewer_channel
+
+    @active_viewer_channel.setter
+    def active_viewer_channel(self, val: int):
+        self._active_viewer_channel = val
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                session.active_viewer_channel = val
+        self.active_viewer_channel_changed.emit(val)
+
+    @property
+    def background_mode(self) -> str:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                return session.background_mode
+        return self._background_mode
+
+    @background_mode.setter
+    def background_mode(self, val: str):
+        self._background_mode = val
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                session.background_mode = val
+        self.background_correction_changed.emit()
+
+    @property
+    def background_params(self) -> dict:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                return session.background_params
+        return self._background_params
+
+    @background_params.setter
+    def background_params(self, val: dict):
+        self._background_params = val
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                session.background_params = val
+        self.background_correction_changed.emit()
+
+    @property
+    def fluorescence_results(self) -> dict:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                return session.fluorescence_results
+        return self._fluorescence_results
+
+    @fluorescence_results.setter
+    def fluorescence_results(self, val: dict):
+        self._fluorescence_results = val
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                session.fluorescence_results = val
+
+    @property
+    def heatmap_cache(self) -> dict:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                return session.heatmap_cache
+        return self._heatmap_cache
+
+    @heatmap_cache.setter
+    def heatmap_cache(self, val: dict):
+        self._heatmap_cache = val
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                session.heatmap_cache = val
+
+    @property
+    def active_metric(self) -> str:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                return session.active_metric
+        return self._active_metric
+
+    @active_metric.setter
+    def active_metric(self, val: str):
+        self._active_metric = val
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                session.active_metric = val
+
+    @property
+    def preprocess_auto_contrast(self) -> bool:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                return getattr(session, "preprocess_auto_contrast", True)
+        return self._preprocess_auto_contrast
+
+    @preprocess_auto_contrast.setter
+    def preprocess_auto_contrast(self, val: bool):
+        self._preprocess_auto_contrast = val
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                session.preprocess_auto_contrast = val
+        self.preprocessing_changed.emit()
+
+    @property
+    def preprocess_percentile_low(self) -> float:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                return getattr(session, "preprocess_percentile_low", 1.0)
+        return self._preprocess_percentile_low
+
+    @preprocess_percentile_low.setter
+    def preprocess_percentile_low(self, val: float):
+        self._preprocess_percentile_low = val
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                session.preprocess_percentile_low = val
+        self.preprocessing_changed.emit()
+
+    @property
+    def preprocess_percentile_high(self) -> float:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                return getattr(session, "preprocess_percentile_high", 99.0)
+        return self._preprocess_percentile_high
+
+    @preprocess_percentile_high.setter
+    def preprocess_percentile_high(self, val: float):
+        self._preprocess_percentile_high = val
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                session.preprocess_percentile_high = val
+        self.preprocessing_changed.emit()
+
+    @property
+    def preprocess_brightness(self) -> float:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                return getattr(session, "preprocess_brightness", 0.0)
+        return self._preprocess_brightness
+
+    @preprocess_brightness.setter
+    def preprocess_brightness(self, val: float):
+        self._preprocess_brightness = val
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                session.preprocess_brightness = val
+        self.preprocessing_changed.emit()
+
+    @property
+    def preprocess_contrast(self) -> float:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                return getattr(session, "preprocess_contrast", 1.0)
+        return self._preprocess_contrast
+
+    @preprocess_contrast.setter
+    def preprocess_contrast(self, val: float):
+        self._preprocess_contrast = val
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                session.preprocess_contrast = val
+        self.preprocessing_changed.emit()
+
+    @property
+    def preprocess_gamma(self) -> float:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                return getattr(session, "preprocess_gamma", 1.0)
+        return self._preprocess_gamma
+
+    @preprocess_gamma.setter
+    def preprocess_gamma(self, val: float):
+        self._preprocess_gamma = val
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                session.preprocess_gamma = val
+        self.preprocessing_changed.emit()
 
 # Global instance of AppState
 state = AppState()
+

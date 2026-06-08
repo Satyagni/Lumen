@@ -29,6 +29,26 @@ class TestWorkspaceSessions(unittest.TestCase):
         state.workspace_manager.reset_batch_session()
         state.reset_analysis_session()
         state.batch_results_dir = ""
+        
+        # Create dummy nuclei_clean.tif for test_analysis_page_save_restore
+        self.dummy_tiff = WORKSPACE_DIR / "nuclei_clean.tif"
+        if not self.dummy_tiff.exists():
+            import numpy as np
+            import tifffile
+            dummy_arr = np.zeros((100, 100), dtype=np.uint16)
+            dummy_arr[20:80, 20:80] = 100
+            tifffile.imwrite(str(self.dummy_tiff), dummy_arr)
+            self.created_dummy = True
+        else:
+            self.created_dummy = False
+
+    def tearDown(self):
+        if hasattr(self, 'created_dummy') and self.created_dummy and self.dummy_tiff.exists():
+            try:
+                import os
+                os.remove(self.dummy_tiff)
+            except Exception:
+                pass
 
     def test_analysis_session_lifecycle(self):
         """Validates that AnalysisSession correctly creates, stores, and invalidates context."""

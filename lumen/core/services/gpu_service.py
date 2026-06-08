@@ -21,7 +21,16 @@ class GPUService:
         try:
             import torch
             cuda_available = torch.cuda.is_available()
+            if cuda_available:
+                vram_bytes = torch.cuda.get_device_properties(0).total_memory
+                vram_gb = vram_bytes / (1024 ** 3)
+                if vram_gb < 4.0:
+                    logger.warning("GPUService: CUDA is available, but GPU VRAM (%.2f GB) is below 4.0 GB threshold (not powerful enough).", vram_gb)
+                    cuda_available = False
         except ImportError:
+            cuda_available = False
+        except Exception as e:
+            logger.warning("GPUService: Exception checking GPU memory: %s", e)
             cuda_available = False
 
         if preference == "Use Global Setting":
@@ -44,12 +53,12 @@ class GPUService:
             if cuda_available:
                 resolved = (True, "CUDA")
             else:
-                logger.warning("GPUService: CUDA requested but unavailable. Falling back to CPU.")
+                logger.warning("GPUService: CUDA requested but unavailable or not powerful enough. Falling back to CPU.")
                 resolved = (False, "CPU (fallback)")
         else: # CPU
             resolved = (False, "CPU")
 
-        logger.info("GPUService: Resolving backend. Preference: %s, CUDA available: %s, Resolved: %s", pref_str, cuda_available, resolved[1])
+        logger.info("GPUService: Resolving backend. Preference: %s, CUDA available/powerful: %s, Resolved: %s", pref_str, cuda_available, resolved[1])
         return resolved
 
     def _detect_backend(self) -> str:
@@ -58,9 +67,15 @@ class GPUService:
         try:
             import torch
             if torch.cuda.is_available():
-                logger.info("GPUService: PyTorch CUDA check succeeded.")
-                return "CUDA"
-            logger.info("GPUService: PyTorch reported CPU (CUDA not active).")
+                vram_bytes = torch.cuda.get_device_properties(0).total_memory
+                vram_gb = vram_bytes / (1024 ** 3)
+                if vram_gb >= 4.0:
+                    logger.info("GPUService: PyTorch CUDA check succeeded. VRAM: %.2f GB.", vram_gb)
+                    return "CUDA"
+                else:
+                    logger.info("GPUService: PyTorch reported CPU fallback (low VRAM: %.2f GB).", vram_gb)
+            else:
+                logger.info("GPUService: PyTorch reported CPU (CUDA not active).")
         except ImportError:
             logger.debug("GPUService: PyTorch not installed in this environment.")
         except Exception as e:

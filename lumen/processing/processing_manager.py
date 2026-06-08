@@ -5,6 +5,81 @@ from PySide6.QtCore import QThread, Signal, QObject, Qt, Slot
 import threading
 from lumen.core.logger import logger
 
+def run_classical_segmentation(raw_arr) -> np.ndarray:
+    """
+    Runs classical Threshold + Watershed segmentation on a raw image array.
+    Returns a 2D int32 masks array where 0 is background and positive integers are cells.
+    """
+    from skimage.filters import threshold_otsu, gaussian
+    from skimage.segmentation import watershed
+    from skimage.feature import peak_local_max
+    from scipy import ndimage as ndi
+    from skimage.morphology import remove_small_objects
+
+    # 1. Convert to grayscale if multi-channel
+    if len(raw_arr.shape) == 3:
+        # Assuming channels-last format (height, width, channels)
+        if raw_arr.shape[2] >= 3:
+            # RGB conversion using standard luminance weights
+            image_gray = (0.2989 * raw_arr[:, :, 0] + 
+                          0.5870 * raw_arr[:, :, 1] + 
+                          0.1140 * raw_arr[:, :, 2])
+        else:
+            image_gray = raw_arr[:, :, 0]
+    else:
+        image_gray = raw_arr.copy()
+
+    # Normalize image to float for stable processing
+    img_min, img_max = image_gray.min(), image_gray.max()
+    if img_max > img_min:
+        image_gray = (image_gray - img_min) / (img_max - img_min)
+    else:
+        return np.zeros(image_gray.shape, dtype=np.int32)
+
+    # 2. Smooth the image to reduce noise
+    smoothed = gaussian(image_gray, sigma=1.0)
+
+    # 3. Thresholding (Otsu thresholding to get binary mask)
+    try:
+        thresh = threshold_otsu(smoothed)
+    except ValueError:
+        thresh = 0.5
+    binary = smoothed > thresh
+
+    # Fill holes in the binary mask
+    binary = ndi.binary_fill_holes(binary)
+
+    # 4. Distance transform
+    distance = ndi.distance_transform_edt(binary)
+
+    # 5. Local maxima detection to find cell centers
+    coords = peak_local_max(distance, min_distance=8, labels=binary)
+    
+    if len(coords) == 0:
+        return ndi.label(binary)[0].astype(np.int32)
+
+    mask = np.zeros(distance.shape, dtype=bool)
+    mask[tuple(coords.T)] = True
+    markers, _ = ndi.label(mask)
+
+    # 6. Watershed segmentation
+    masks = watershed(-distance, markers, mask=binary)
+
+    # Clean up small objects (e.g. noise particles less than 50 pixels)
+    masks = remove_small_objects(masks.astype(np.int32), min_size=50)
+    
+    # Re-label to ensure consecutive integers starting from 1
+    unique_labels = np.unique(masks)
+    new_masks = np.zeros_like(masks, dtype=np.int32)
+    new_label = 1
+    for label in unique_labels:
+        if label == 0:
+            continue
+        new_masks[masks == label] = new_label
+        new_label += 1
+
+    return new_masks
+
 class AnalysisWorker(QThread):
     """Asynchronous background worker executing local Cellpose model inference."""
     
@@ -99,47 +174,61 @@ class AnalysisWorker(QThread):
             
             # Resolve execution backend based on preference
             from lumen.core.services.gpu_service import gpu_service
-            from cellpose import models
             pref = self.parameters.get("backend_preference", "Use Global Setting")
             use_gpu, resolved_backend_name = gpu_service.resolve_execution_backend(pref)
             
-            # Check if models exist in user home directory to log first-run setup
-            cellpose_dir = Path.home() / '.cellpose' / 'models'
-            model_download_needed = True
-            if cellpose_dir.exists():
-                model_files = list(cellpose_dir.glob(f"*{model_type}*"))
-                if model_files:
-                    model_download_needed = False
+            if use_gpu:
+                from cellpose import models
+                # Check if models exist in user home directory to log first-run setup
+                cellpose_dir = Path.home() / '.cellpose' / 'models'
+                model_download_needed = True
+                if cellpose_dir.exists():
+                    model_files = list(cellpose_dir.glob(f"*{model_type}*"))
+                    if model_files:
+                        model_download_needed = False
+                        
+                if model_download_needed:
+                    logger.info("AnalysisWorker: Local model weights not found. Preparing first-time download (~80MB)...")
+                    self.status_updated.emit("Downloading Cellpose model weights (first-time setup)...")
+                else:
+                    self.status_updated.emit("Initializing Cellpose model...")
                     
-            if model_download_needed:
-                logger.info("AnalysisWorker: Local model weights not found. Preparing first-time download (~80MB)...")
-                self.status_updated.emit("Downloading Cellpose model weights (first-time setup)...")
-            else:
-                self.status_updated.emit("Initializing Cellpose model...")
+                model = models.Cellpose(gpu=use_gpu, model_type=model_type)
                 
-            model = models.Cellpose(gpu=use_gpu, model_type=model_type)
-            
-            if self._is_cancelled:
-                return
+                if self._is_cancelled:
+                    return
 
-            self.progress_updated.emit(40)
-            self.status_updated.emit("Running image preprocessing...")
-            
-            # Step 4: Execute Cellpose safely
-            self.status_updated.emit("Executing Cellpose segmentation (inference)...")
-            logger.info("AnalysisWorker: Running model.eval on model_type='%s', gpu=%s, channels=%s, flow_threshold=%s, cellprob_threshold=%s, resample=%s", 
-                        model_type, use_gpu, channels, flow_threshold, cellprob_threshold, resample)
-            
-            start_time = time.time()
-            masks, flows, styles, diams = model.eval(
-                raw_arr,
-                channels=channels,
-                flow_threshold=flow_threshold,
-                cellprob_threshold=cellprob_threshold,
-                resample=resample,
-                diameter=diameter
-            )
-            elapsed = time.time() - start_time
+                self.progress_updated.emit(40)
+                self.status_updated.emit("Running image preprocessing...")
+                
+                # Step 4: Execute Cellpose safely
+                self.status_updated.emit("Executing Cellpose segmentation (inference)...")
+                logger.info("AnalysisWorker: Running model.eval on model_type='%s', gpu=%s, channels=%s, flow_threshold=%s, cellprob_threshold=%s, resample=%s", 
+                            model_type, use_gpu, channels, flow_threshold, cellprob_threshold, resample)
+                
+                start_time = time.time()
+                masks, flows, styles, diams = model.eval(
+                    raw_arr,
+                    channels=channels,
+                    flow_threshold=flow_threshold,
+                    cellprob_threshold=cellprob_threshold,
+                    resample=resample,
+                    diameter=diameter
+                )
+                elapsed = time.time() - start_time
+            else:
+                # CPU fallback to classical Threshold + Watershed (Option 1)
+                if self._is_cancelled:
+                    return
+
+                self.progress_updated.emit(40)
+                self.status_updated.emit("Executing classical Threshold + Watershed segmentation...")
+                logger.info("AnalysisWorker: Running classical Threshold + Watershed CPU segmentation (skimage/scipy)")
+                
+                start_time = time.time()
+                masks = run_classical_segmentation(raw_arr)
+                elapsed = time.time() - start_time
+                diams = None
             
             if self._is_cancelled:
                 return
@@ -162,18 +251,21 @@ class AnalysisWorker(QThread):
                 
                 if area > 0:
                     mean_y, mean_x = np.mean(indices, axis=0)
-                    diameter = round(2 * np.sqrt(area / np.pi), 2)
+                    diameter_val = round(2 * np.sqrt(area / np.pi), 2)
                     cell_metrics[int(label)] = {
                         "area_px": int(area),
                         "centroid": (round(float(mean_x), 1), round(float(mean_y), 1)),
-                        "diameter_px": float(diameter),
-                        "diameter_estimate": float(diameter)
+                        "diameter_px": float(diameter_val),
+                        "diameter_estimate": float(diameter_val)
                     }
             
             if cell_count > 0:
                 mean_cell_area_px = float(np.mean(cell_areas))
                 median_cell_area_px = float(np.median(cell_areas))
-                avg_diameter = float(np.mean(diams)) if diams is not None and len(np.atleast_1d(diams)) > 0 else 0.0
+                if resolved_backend_name == "CPU" or resolved_backend_name == "CPU (fallback)":
+                    avg_diameter = float(np.mean([c["diameter_px"] for c in cell_metrics.values()])) if cell_metrics else 0.0
+                else:
+                    avg_diameter = float(np.mean(diams)) if diams is not None and len(np.atleast_1d(diams)) > 0 else 0.0
             else:
                 mean_cell_area_px = 0.0
                 median_cell_area_px = 0.0
@@ -523,46 +615,60 @@ class BatchAnalysisWorker(QObject):
                 if self._cancel_event.is_set():
                     break
                     
-                # Cache and reuse model
-                if model_cache is None or model_cache_type != model_type or model_cache_gpu != use_gpu:
-                    cellpose_dir = Path.home() / '.cellpose' / 'models'
-                    model_download_needed = True
-                    if cellpose_dir.exists():
-                        model_files = list(cellpose_dir.glob(f"*{model_type}*"))
-                        if model_files:
-                            model_download_needed = False
+                if use_gpu:
+                    # Cache and reuse model
+                    if model_cache is None or model_cache_type != model_type or model_cache_gpu != use_gpu:
+                        cellpose_dir = Path.home() / '.cellpose' / 'models'
+                        model_download_needed = True
+                        if cellpose_dir.exists():
+                            model_files = list(cellpose_dir.glob(f"*{model_type}*"))
+                            if model_files:
+                                model_download_needed = False
+                                
+                        if model_download_needed:
+                            logger.info("BatchAnalysisWorker: Local model weights not found. Preparing first-time download...")
+                            self.status_updated.emit(self.batch_token, "Downloading Cellpose model weights...")
+                        else:
+                            self.status_updated.emit(self.batch_token, "Initializing Cellpose model...")
                             
-                    if model_download_needed:
-                        logger.info("BatchAnalysisWorker: Local model weights not found. Preparing first-time download...")
-                        self.status_updated.emit(self.batch_token, "Downloading Cellpose model weights...")
-                    else:
-                        self.status_updated.emit(self.batch_token, "Initializing Cellpose model...")
-                        
-                    from cellpose import models
-                    model_cache = models.Cellpose(gpu=use_gpu, model_type=model_type)
-                    model_cache_type = model_type
-                    model_cache_gpu = use_gpu
-                
-                if self._cancel_event.is_set():
-                    break
+                        from cellpose import models
+                        model_cache = models.Cellpose(gpu=use_gpu, model_type=model_type)
+                        model_cache_type = model_type
+                        model_cache_gpu = use_gpu
+                    
+                    if self._cancel_event.is_set():
+                        break
 
-                self.progress_updated.emit(self.batch_token, 40)
-                self.status_updated.emit(self.batch_token, "Running image preprocessing...")
-                
-                self.status_updated.emit(self.batch_token, "Executing Cellpose segmentation...")
-                logger.info("BatchAnalysisWorker (token=%d): Running model.eval on model_type='%s', gpu=%s", 
-                            self.batch_token, model_type, use_gpu)
-                
-                start_time = time.time()
-                masks, flows, styles, diams = model_cache.eval(
-                    raw_arr,
-                    channels=channels,
-                    flow_threshold=flow_threshold,
-                    cellprob_threshold=cellprob_threshold,
-                    resample=resample,
-                    diameter=diameter
-                )
-                elapsed = time.time() - start_time
+                    self.progress_updated.emit(self.batch_token, 40)
+                    self.status_updated.emit(self.batch_token, "Running image preprocessing...")
+                    
+                    self.status_updated.emit(self.batch_token, "Executing Cellpose segmentation...")
+                    logger.info("BatchAnalysisWorker (token=%d): Running model.eval on model_type='%s', gpu=%s", 
+                                self.batch_token, model_type, use_gpu)
+                    
+                    start_time = time.time()
+                    masks, flows, styles, diams = model_cache.eval(
+                        raw_arr,
+                        channels=channels,
+                        flow_threshold=flow_threshold,
+                        cellprob_threshold=cellprob_threshold,
+                        resample=resample,
+                        diameter=diameter
+                    )
+                    elapsed = time.time() - start_time
+                else:
+                    # CPU fallback to classical Threshold + Watershed (Option 1)
+                    if self._cancel_event.is_set():
+                        break
+                    
+                    self.progress_updated.emit(self.batch_token, 40)
+                    self.status_updated.emit(self.batch_token, "Executing classical Threshold + Watershed segmentation...")
+                    logger.info("BatchAnalysisWorker (token=%d): Running classical Threshold + Watershed CPU segmentation (skimage/scipy)", self.batch_token)
+                    
+                    start_time = time.time()
+                    masks = run_classical_segmentation(raw_arr)
+                    elapsed = time.time() - start_time
+                    diams = None
                 
                 if self._cancel_event.is_set():
                     break
@@ -594,7 +700,10 @@ class BatchAnalysisWorker(QObject):
                 if cell_count > 0:
                     mean_cell_area_px = float(np.mean(cell_areas))
                     median_cell_area_px = float(np.median(cell_areas))
-                    avg_diameter = float(np.mean(diams)) if diams is not None and len(np.atleast_1d(diams)) > 0 else 0.0
+                    if resolved_backend_name == "CPU" or resolved_backend_name == "CPU (fallback)":
+                        avg_diameter = float(np.mean([c["diameter_px"] for c in cell_metrics.values()])) if cell_metrics else 0.0
+                    else:
+                        avg_diameter = float(np.mean(diams)) if diams is not None and len(np.atleast_1d(diams)) > 0 else 0.0
                 else:
                     mean_cell_area_px = 0.0
                     median_cell_area_px = 0.0

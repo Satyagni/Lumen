@@ -1,0 +1,3 @@
+cell_id,area,perimeter,GFP_mean,GFP_median,GFP_integrated_intensity,GFP_min,GFP_max,GFP_std_deviation
+1,4,4.0,10.0,10.0,40.0,10.0,10.0,0.0
+2,4,4.0,100.0,100.0,400.0,100.0,100.0,0.0

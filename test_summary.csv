@@ -1,0 +1,9 @@
+Metric,Value
+image_filename,test.tif
+timestamp,2026-06-11
+total_cell_count,2
+average_area,4.0
+GFP_mean_average,55.0
+GFP_median_average,55.0
+preprocessing_settings,"{""gamma"": 1.2}"
+segmentation_settings,"{""model"": ""cyto3""}"

@@ -61,39 +61,36 @@ class TestFluorescenceQuantifier(unittest.TestCase):
         self.assertEqual(len(results), 1)
         res = results[0]
         
-        # Geometric metrics verification
+        # Geometric metrics verification (area must be integer)
         self.assertEqual(res["cell_id"], 1)
-        self.assertEqual(res["area"], 9.0)
+        self.assertEqual(res["area"], 9)
+        self.assertIsInstance(res["area"], int)
+        
         # 3x3 square contour perimeter through pixel centers is 8.0
         self.assertEqual(res["perimeter"], 8.0)
         
         # Uniform channel verification (ch1)
-        ch1_metrics = res["channels"]["Uniform"]
-        self.assertAlmostEqual(ch1_metrics["mean"], 10.0)
-        self.assertAlmostEqual(ch1_metrics["median"], 10.0)
-        self.assertAlmostEqual(ch1_metrics["integrated intensity"], 90.0)
-        self.assertAlmostEqual(ch1_metrics["integrated_intensity"], 90.0)
-        self.assertAlmostEqual(ch1_metrics["min"], 10.0)
-        self.assertAlmostEqual(ch1_metrics["max"], 10.0)
-        self.assertAlmostEqual(ch1_metrics["std deviation"], 0.0)
-        self.assertAlmostEqual(ch1_metrics["std_deviation"], 0.0)
-        
-        # Flat format verification
         self.assertAlmostEqual(res["Uniform_mean"], 10.0)
+        self.assertAlmostEqual(res["Uniform_median"], 10.0)
         self.assertAlmostEqual(res["Uniform_integrated_intensity"], 90.0)
+        self.assertAlmostEqual(res["Uniform_min"], 10.0)
+        self.assertAlmostEqual(res["Uniform_max"], 10.0)
+        self.assertAlmostEqual(res["Uniform_std_deviation"], 0.0)
+        
+        # Verify no space-separated duplicates exist
+        self.assertNotIn("Uniform_integrated intensity", res)
+        self.assertNotIn("Uniform_std deviation", res)
+        self.assertNotIn("channels", res)
         
         # Gradient channel verification (ch2)
-        ch2_metrics = res["channels"]["Gradient"]
-        self.assertAlmostEqual(ch2_metrics["mean"], 5.0)
-        self.assertAlmostEqual(ch2_metrics["median"], 5.0)
-        self.assertAlmostEqual(ch2_metrics["integrated intensity"], 45.0)
-        self.assertAlmostEqual(ch2_metrics["integrated_intensity"], 45.0)
-        self.assertAlmostEqual(ch2_metrics["min"], 1.0)
-        self.assertAlmostEqual(ch2_metrics["max"], 9.0)
+        self.assertAlmostEqual(res["Gradient_mean"], 5.0)
+        self.assertAlmostEqual(res["Gradient_median"], 5.0)
+        self.assertAlmostEqual(res["Gradient_integrated_intensity"], 45.0)
+        self.assertAlmostEqual(res["Gradient_min"], 1.0)
+        self.assertAlmostEqual(res["Gradient_max"], 9.0)
         # Expected std deviation of [1, 2, 3, 4, 5, 6, 7, 8, 9] is sqrt(20/3) approx 2.581988897
         expected_std = np.std(np.arange(1, 10))
-        self.assertAlmostEqual(ch2_metrics["std deviation"], expected_std)
-        self.assertAlmostEqual(ch2_metrics["std_deviation"], expected_std)
+        self.assertAlmostEqual(res["Gradient_std_deviation"], expected_std)
 
     def test_multi_cell_isolation(self):
         """Verifies multi-cell isolation: separation, no leakage, and sorted outputs."""
@@ -122,31 +119,31 @@ class TestFluorescenceQuantifier(unittest.TestCase):
         
         # Verify Cell 1 metrics
         cell1 = results[0]
-        self.assertEqual(cell1["area"], 3.0)
+        self.assertEqual(cell1["area"], 3)
+        self.assertIsInstance(cell1["area"], int)
         # Area = 3 (> 2), uses cv2.findContours. 1x3 segment contour length is 4.0
         self.assertEqual(cell1["perimeter"], 4.0)
         
-        ch1_metrics_c1 = cell1["channels"]["Ch1"]
-        self.assertAlmostEqual(ch1_metrics_c1["mean"], 20.0)
-        self.assertAlmostEqual(ch1_metrics_c1["median"], 20.0)
-        self.assertAlmostEqual(ch1_metrics_c1["integrated intensity"], 60.0)
-        self.assertAlmostEqual(ch1_metrics_c1["min"], 10.0)
-        self.assertAlmostEqual(ch1_metrics_c1["max"], 30.0)
-        self.assertAlmostEqual(ch1_metrics_c1["std deviation"], np.std([10.0, 20.0, 30.0]))
+        self.assertAlmostEqual(cell1["Ch1_mean"], 20.0)
+        self.assertAlmostEqual(cell1["Ch1_median"], 20.0)
+        self.assertAlmostEqual(cell1["Ch1_integrated_intensity"], 60.0)
+        self.assertAlmostEqual(cell1["Ch1_min"], 10.0)
+        self.assertAlmostEqual(cell1["Ch1_max"], 30.0)
+        self.assertAlmostEqual(cell1["Ch1_std_deviation"], np.std([10.0, 20.0, 30.0]))
         
         # Verify Cell 2 metrics
         cell2 = results[1]
-        self.assertEqual(cell2["area"], 2.0)
+        self.assertEqual(cell2["area"], 2)
+        self.assertIsInstance(cell2["area"], int)
         # Area = 2 (<= 2), falls back to pixel-edge perimeter. A 1x2 segment has 6 outer edges.
         self.assertEqual(cell2["perimeter"], 6.0)
         
-        ch1_metrics_c2 = cell2["channels"]["Ch1"]
-        self.assertAlmostEqual(ch1_metrics_c2["mean"], 150.0)
-        self.assertAlmostEqual(ch1_metrics_c2["median"], 150.0)
-        self.assertAlmostEqual(ch1_metrics_c2["integrated intensity"], 300.0)
-        self.assertAlmostEqual(ch1_metrics_c2["min"], 100.0)
-        self.assertAlmostEqual(ch1_metrics_c2["max"], 200.0)
-        self.assertAlmostEqual(ch1_metrics_c2["std deviation"], np.std([100.0, 200.0]))
+        self.assertAlmostEqual(cell2["Ch1_mean"], 150.0)
+        self.assertAlmostEqual(cell2["Ch1_median"], 150.0)
+        self.assertAlmostEqual(cell2["Ch1_integrated_intensity"], 300.0)
+        self.assertAlmostEqual(cell2["Ch1_min"], 100.0)
+        self.assertAlmostEqual(cell2["Ch1_max"], 200.0)
+        self.assertAlmostEqual(cell2["Ch1_std_deviation"], np.std([100.0, 200.0]))
 
     def test_single_pixel_perimeter_fallback(self):
         """Verifies fallback behavior for 1x1 pixel mask."""

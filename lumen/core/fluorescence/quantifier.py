@@ -106,14 +106,13 @@ def quantify_fluorescence(
         cell_mask = (masks == label)
         
         # Calculate cell geometry metrics
-        area_val = float(np.sum(cell_mask))
+        area_val = int(np.sum(cell_mask))
         perimeter_val = calculate_perimeter(cell_mask)
         
         cell_metrics = {
             "cell_id": int(label),
             "area": area_val,
-            "perimeter": perimeter_val,
-            "channels": {}
+            "perimeter": perimeter_val
         }
         
         # Calculate channel-specific intensity metrics
@@ -129,26 +128,12 @@ def quantify_fluorescence(
             max_val = float(np.max(pixel_vals))
             std_val = float(np.std(pixel_vals))
             
-            # Nested representation
-            cell_metrics["channels"][name] = {
-                "mean": mean_val,
-                "median": median_val,
-                "integrated intensity": integrated_int,
-                "integrated_intensity": integrated_int,
-                "min": min_val,
-                "max": max_val,
-                "std deviation": std_val,
-                "std_deviation": std_val
-            }
-            
             # Flattened representation for compatibility/tabular export
             cell_metrics[f"{name}_mean"] = mean_val
             cell_metrics[f"{name}_median"] = median_val
-            cell_metrics[f"{name}_integrated intensity"] = integrated_int
             cell_metrics[f"{name}_integrated_intensity"] = integrated_int
             cell_metrics[f"{name}_min"] = min_val
             cell_metrics[f"{name}_max"] = max_val
-            cell_metrics[f"{name}_std deviation"] = std_val
             cell_metrics[f"{name}_std_deviation"] = std_val
             
         results.append(cell_metrics)

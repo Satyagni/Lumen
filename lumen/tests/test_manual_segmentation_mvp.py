@@ -534,7 +534,7 @@ class TestManualSegmentationMVP(unittest.TestCase):
             explorer._on_open_analysis_clicked()
             
             # Verify global state values are staged
-            self.assertEqual(state.current_image_path, str(raw_img_path))
+            self.assertEqual(state.current_image_path, str(raw_img_path).replace('\\', '/'))
             self.assertEqual(state.current_origin_type, "batch")
             self.assertEqual(state.current_batch_origin_context, str(batch_dir))
             
@@ -775,7 +775,7 @@ class TestManualSegmentationMVP(unittest.TestCase):
             upload_page._on_proceed_clicked()
             
             # Now it should be set
-            self.assertEqual(state.current_image_path, str(raw_img_path))
+            self.assertEqual(state.current_image_path, str(raw_img_path).replace('\\', '/'))
             
         finally:
             shutil.rmtree(temp_dir)

@@ -684,6 +684,13 @@ class UploadPage(QWidget):
         state.backend_preference_changed.connect(self._on_global_backend_changed)
 
     def _set_mode(self, mode: str):
+        if mode == "batch":
+            sess = state.workspace_manager.get_analysis_session(state.current_image_path) if state.current_image_path else None
+            logger.warning(
+                "TIMELINE [3. Entering Batch Upload]: state.current_workflow=%s, session.current_workflow=%s",
+                state.current_workflow,
+                sess.current_workflow if sess else None
+            )
         self.active_tab = mode
         
         # Style active tab indicator
@@ -1147,6 +1154,12 @@ class UploadPage(QWidget):
         navigation_service.navigate_to("analysis")
 
     def showEvent(self, event):
+        sess = state.workspace_manager.get_analysis_session(state.current_image_path) if state.current_image_path else None
+        logger.warning(
+            "TIMELINE [2. Entering Upload page]: state.current_workflow=%s, session.current_workflow=%s",
+            state.current_workflow,
+            sess.current_workflow if sess else None
+        )
         super().showEvent(event)
         if state.current_workflow:
             idx = self.batch_workflow_combo.findData(state.current_workflow)

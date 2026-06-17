@@ -8,7 +8,7 @@ import tifffile
 import PIL.Image
 from pathlib import Path
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton, QGridLayout, QSpacerItem, QSizePolicy, QFileDialog, QMessageBox
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton, QGridLayout, QSpacerItem, QSizePolicy, QFileDialog, QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView
 )
 from PySide6.QtCore import Qt, Slot, QUrl
 from PySide6.QtGui import QCursor, QPdfWriter, QTextDocument, QPageSize, QImage
@@ -189,6 +189,27 @@ class ResultsPage(QWidget):
         empty_layout.addWidget(self.empty_desc)
         main_layout.addWidget(self.empty_state_card)
 
+        # Preview Table Container (for fluorescence workflow)
+        self.table_container = QFrame()
+        self.table_container.setObjectName("TableContainerFrame")
+        self.table_container.setVisible(False)
+        table_layout = QVBoxLayout(self.table_container)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.setSpacing(8)
+        
+        self.table_title = QLabel("Individual Cell Measurements Preview (Top 10)")
+        self.table_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #FFFFFF;")
+        table_layout.addWidget(self.table_title)
+        
+        self.table = QTableWidget()
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setFixedHeight(260)
+        table_layout.addWidget(self.table)
+        
+        main_layout.addWidget(self.table_container)
+
         # Export Panel Section
         self.export_frame = QFrame()
         self.export_frame.setObjectName("ExportPanelFrame")
@@ -230,9 +251,23 @@ class ResultsPage(QWidget):
         self.images_btn.setCursor(QCursor(Qt.ArrowCursor))
         self.images_btn.setEnabled(False)
 
+        self.export_cell_csv_btn = QPushButton("Export Cell CSV")
+        self.export_cell_csv_btn.setProperty("class", "SecondaryButton")
+        self.export_cell_csv_btn.setCursor(QCursor(Qt.ArrowCursor))
+        self.export_cell_csv_btn.setEnabled(False)
+        self.export_cell_csv_btn.setVisible(False)
+
+        self.export_summary_csv_btn = QPushButton("Export Summary CSV")
+        self.export_summary_csv_btn.setProperty("class", "SecondaryButton")
+        self.export_summary_csv_btn.setCursor(QCursor(Qt.ArrowCursor))
+        self.export_summary_csv_btn.setEnabled(False)
+        self.export_summary_csv_btn.setVisible(False)
+
         buttons_layout.addWidget(self.csv_btn)
         buttons_layout.addWidget(self.pdf_btn)
         buttons_layout.addWidget(self.images_btn)
+        buttons_layout.addWidget(self.export_cell_csv_btn)
+        buttons_layout.addWidget(self.export_summary_csv_btn)
         buttons_layout.addStretch(1)
         export_layout.addLayout(buttons_layout)
 
@@ -250,6 +285,8 @@ class ResultsPage(QWidget):
         self.csv_btn.clicked.connect(self._on_export_csv)
         self.pdf_btn.clicked.connect(self._on_export_pdf)
         self.images_btn.clicked.connect(self._on_export_masks)
+        self.export_cell_csv_btn.clicked.connect(self._on_export_cell_csv)
+        self.export_summary_csv_btn.clicked.connect(self._on_export_summary_csv)
         
         self._sync_state()
 
@@ -261,41 +298,144 @@ class ResultsPage(QWidget):
 
     @Slot(dict)
     def _on_analysis_completed(self, results: dict):
-        if results:
-            self.empty_state_card.setVisible(False)
-            
-            cell_count = results.get("cell_count", 0)
-            mean_area = results.get("mean_cell_area_px", 0.0)
-            median_area = results.get("median_cell_area_px", 0.0)
-            cell_density = results.get("cell_density", 0.0)
-            avg_diameter = results.get("average_diameter_px", 0.0)
-            elapsed = results.get("processing_time_s", 0.0)
-            
-            self.metric_cards[0].set_value(str(cell_count))
-            self.metric_cards[1].set_value(f"{mean_area:.2f}" if mean_area > 0 else "--")
-            self.metric_cards[2].set_value(f"{median_area:.2f}" if median_area > 0 else "--")
-            self.metric_cards[3].set_value(f"{cell_density:.2e}" if cell_density > 0 else "--")
-            self.metric_cards[4].set_value(f"{avg_diameter:.2f}" if avg_diameter > 0 else "--")
-            self.metric_cards[5].set_value(f"{elapsed:.2f}")
-            
-            # Enable Export buttons
-            self.csv_btn.setEnabled(True)
-            self.csv_btn.setCursor(QCursor(Qt.PointingHandCursor))
-            self.pdf_btn.setEnabled(True)
-            self.pdf_btn.setCursor(QCursor(Qt.PointingHandCursor))
-            self.images_btn.setEnabled(True)
-            self.images_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        if state.current_workflow == "fluorescence":
+            fluor_results = state.fluorescence_results
+            if results and fluor_results:
+                self.empty_state_card.setVisible(False)
+                
+                # Update card headers, values, units
+                self.metric_cards[0].title_label.setText("TOTAL CELL COUNT")
+                self.metric_cards[0].unit_label.setText("cells")
+                self.metric_cards[0].set_value(str(len(fluor_results)))
+                self.metric_cards[0].setVisible(True)
+                
+                self.metric_cards[1].title_label.setText("AVERAGE CELL AREA")
+                self.metric_cards[1].unit_label.setText("px")
+                avg_area = float(np.mean([r["area"] for r in fluor_results]))
+                self.metric_cards[1].set_value(f"{avg_area:.2f}")
+                self.metric_cards[1].setVisible(True)
+                
+                # Dynamic channels
+                from lumen.core.fluorescence.exporters import infer_channels_from_output
+                channels = infer_channels_from_output(fluor_results)
+                
+                for i in range(2, 6):
+                    chan_idx = i - 2
+                    if chan_idx < len(channels):
+                        ch_name = channels[chan_idx]
+                        mean_key = f"{ch_name}_mean"
+                        mean_vals = [r[mean_key] for r in fluor_results if mean_key in r]
+                        avg_mean = float(np.mean(mean_vals)) if mean_vals else 0.0
+                        
+                        self.metric_cards[i].title_label.setText(f"{ch_name.upper()} MEAN INTENSITY")
+                        self.metric_cards[i].unit_label.setText("a.u.")
+                        self.metric_cards[i].set_value(f"{avg_mean:.2f}")
+                        self.metric_cards[i].setVisible(True)
+                    else:
+                        self.metric_cards[i].setVisible(False)
+                        
+                # Populate Top 10 Preview Table
+                self.table_container.setVisible(True)
+                columns = ["Cell ID", "Area (px)", "Perimeter (px)"] + [f"{ch} Mean" for ch in channels]
+                self.table.setRowCount(min(10, len(fluor_results)))
+                self.table.setColumnCount(len(columns))
+                self.table.setHorizontalHeaderLabels(columns)
+                
+                for row_idx, cell in enumerate(fluor_results[:10]):
+                    self.table.setItem(row_idx, 0, QTableWidgetItem(str(cell["cell_id"])))
+                    self.table.setItem(row_idx, 1, QTableWidgetItem(str(cell["area"])))
+                    self.table.setItem(row_idx, 2, QTableWidgetItem(f"{cell['perimeter']:.2f}"))
+                    
+                    for col_idx, ch in enumerate(channels):
+                        mean_val = cell.get(f"{ch}_mean", 0.0)
+                        self.table.setItem(row_idx, 3 + col_idx, QTableWidgetItem(f"{mean_val:.2f}"))
+                
+                # Toggle Export Buttons visibility & state
+                self.csv_btn.setVisible(False)
+                self.pdf_btn.setVisible(False)
+                self.images_btn.setVisible(False)
+                self.export_cell_csv_btn.setVisible(True)
+                self.export_cell_csv_btn.setEnabled(True)
+                self.export_cell_csv_btn.setCursor(QCursor(Qt.PointingHandCursor))
+                self.export_summary_csv_btn.setVisible(True)
+                self.export_summary_csv_btn.setEnabled(True)
+                self.export_summary_csv_btn.setCursor(QCursor(Qt.PointingHandCursor))
+            else:
+                self.empty_state_card.setVisible(True)
+                for card in self.metric_cards:
+                    card.set_value("--")
+                self.table_container.setVisible(False)
+                
+                self.csv_btn.setVisible(False)
+                self.pdf_btn.setVisible(False)
+                self.images_btn.setVisible(False)
+                self.export_cell_csv_btn.setVisible(True)
+                self.export_cell_csv_btn.setEnabled(False)
+                self.export_cell_csv_btn.setCursor(QCursor(Qt.ArrowCursor))
+                self.export_summary_csv_btn.setVisible(True)
+                self.export_summary_csv_btn.setEnabled(False)
+                self.export_summary_csv_btn.setCursor(QCursor(Qt.ArrowCursor))
         else:
-            self.empty_state_card.setVisible(True)
-            for card in self.metric_cards:
-                card.set_value("--")
+            self.table_container.setVisible(False)
             
-            self.csv_btn.setEnabled(False)
-            self.csv_btn.setCursor(QCursor(Qt.ArrowCursor))
-            self.pdf_btn.setEnabled(False)
-            self.pdf_btn.setCursor(QCursor(Qt.ArrowCursor))
-            self.images_btn.setEnabled(False)
-            self.images_btn.setCursor(QCursor(Qt.ArrowCursor))
+            # Show original buttons
+            self.csv_btn.setVisible(True)
+            self.pdf_btn.setVisible(True)
+            self.images_btn.setVisible(True)
+            self.export_cell_csv_btn.setVisible(False)
+            self.export_summary_csv_btn.setVisible(False)
+            
+            # Original titles, units, and visibility
+            self.metric_cards[0].title_label.setText("TOTAL CELL COUNT")
+            self.metric_cards[0].unit_label.setText("cells")
+            self.metric_cards[1].title_label.setText("MEAN CELL AREA")
+            self.metric_cards[1].unit_label.setText("px²")
+            self.metric_cards[2].title_label.setText("MEDIAN CELL AREA")
+            self.metric_cards[2].unit_label.setText("px²")
+            self.metric_cards[3].title_label.setText("CELL DENSITY")
+            self.metric_cards[3].unit_label.setText("cells/px²")
+            self.metric_cards[4].title_label.setText("AVERAGE DIAMETER")
+            self.metric_cards[4].unit_label.setText("px")
+            self.metric_cards[5].title_label.setText("PROCESSING TIME")
+            self.metric_cards[5].unit_label.setText("seconds")
+            
+            for card in self.metric_cards:
+                card.setVisible(True)
+                
+            if results:
+                self.empty_state_card.setVisible(False)
+                
+                cell_count = results.get("cell_count", 0)
+                mean_area = results.get("mean_cell_area_px", 0.0)
+                median_area = results.get("median_cell_area_px", 0.0)
+                cell_density = results.get("cell_density", 0.0)
+                avg_diameter = results.get("average_diameter_px", 0.0)
+                elapsed = results.get("processing_time_s", 0.0)
+                
+                self.metric_cards[0].set_value(str(cell_count))
+                self.metric_cards[1].set_value(f"{mean_area:.2f}" if mean_area > 0 else "--")
+                self.metric_cards[2].set_value(f"{median_area:.2f}" if median_area > 0 else "--")
+                self.metric_cards[3].set_value(f"{cell_density:.2e}" if cell_density > 0 else "--")
+                self.metric_cards[4].set_value(f"{avg_diameter:.2f}" if avg_diameter > 0 else "--")
+                self.metric_cards[5].set_value(f"{elapsed:.2f}")
+                
+                self.csv_btn.setEnabled(True)
+                self.csv_btn.setCursor(QCursor(Qt.PointingHandCursor))
+                self.pdf_btn.setEnabled(True)
+                self.pdf_btn.setCursor(QCursor(Qt.PointingHandCursor))
+                self.images_btn.setEnabled(True)
+                self.images_btn.setCursor(QCursor(Qt.PointingHandCursor))
+            else:
+                self.empty_state_card.setVisible(True)
+                for card in self.metric_cards:
+                    card.set_value("--")
+                
+                self.csv_btn.setEnabled(False)
+                self.csv_btn.setCursor(QCursor(Qt.ArrowCursor))
+                self.pdf_btn.setEnabled(False)
+                self.pdf_btn.setCursor(QCursor(Qt.ArrowCursor))
+                self.images_btn.setEnabled(False)
+                self.images_btn.setCursor(QCursor(Qt.ArrowCursor))
 
     @Slot(str)
     def _sync_theme(self, theme_name: str = ""):
@@ -319,6 +459,24 @@ class ResultsPage(QWidget):
             self.empty_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #111827;")
             self.empty_desc.setStyleSheet("font-size: 11px; color: #4B5563;")
             
+            self.table_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #111827;")
+            self.table.setStyleSheet("""
+                QTableWidget {
+                    background-color: #FFFFFF;
+                    color: #111827;
+                    gridline-color: #E5E7EB;
+                    border: 1px solid #D1D5DB;
+                    border-radius: 6px;
+                }
+                QHeaderView::section {
+                    background-color: #F3F4F6;
+                    color: #374151;
+                    padding: 6px;
+                    border: 1px solid #D1D5DB;
+                    font-weight: bold;
+                }
+            """)
+            
             self.export_frame.setStyleSheet("""
                 #ExportPanelFrame {
                     background-color: #FFFFFF;
@@ -341,6 +499,24 @@ class ResultsPage(QWidget):
             self.empty_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #E5E7EB;")
             self.empty_desc.setStyleSheet("font-size: 11px; color: #9CA3AF;")
             
+            self.table_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #FFFFFF;")
+            self.table.setStyleSheet("""
+                QTableWidget {
+                    background-color: #1C1C22;
+                    color: #F3F4F6;
+                    gridline-color: #2B2B35;
+                    border: 1px solid #2B2B35;
+                    border-radius: 6px;
+                }
+                QHeaderView::section {
+                    background-color: #24242B;
+                    color: #9CA3AF;
+                    padding: 6px;
+                    border: 1px solid #2B2B35;
+                    font-weight: bold;
+                }
+            """)
+            
             self.export_frame.setStyleSheet("""
                 #ExportPanelFrame {
                     background-color: #1C1C22;
@@ -351,6 +527,73 @@ class ResultsPage(QWidget):
             """)
             self.export_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #FFFFFF;")
             self.export_desc.setStyleSheet("font-size: 11px; color: #9CA3AF;")
+
+    def _on_export_cell_csv(self):
+        results = state.fluorescence_results
+        if not results:
+            QMessageBox.warning(self, "Export Failed", "No active fluorescence metrics found.")
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Export Cell CSV", "", "CSV Files (*.csv)"
+        )
+        if not file_path:
+            return
+
+        try:
+            from lumen.core.fluorescence.exporters import export_cell_csv
+            export_cell_csv(results, file_path)
+            logger.info("ResultsPage: Successfully exported Cell CSV: %s", file_path)
+            QMessageBox.information(self, "Export Complete", "Cell CSV exported successfully!")
+        except Exception as e:
+            logger.error("ResultsPage: Cell CSV export failed: %s", e, exc_info=True)
+            QMessageBox.critical(self, "Export Failed", f"Failed to export Cell CSV:\n{str(e)}")
+
+    def _on_export_summary_csv(self):
+        results = state.fluorescence_results
+        if not results:
+            QMessageBox.warning(self, "Export Failed", "No active fluorescence metrics found.")
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Export Summary CSV", "", "CSV Files (*.csv)"
+        )
+        if not file_path:
+            return
+
+        try:
+            from lumen.core.fluorescence.exporters import export_summary_csv
+            import time
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            filename = os.path.basename(state.current_image_path) if state.current_image_path else "Unknown"
+            
+            pre_settings = {
+                "auto_contrast": state.preprocess_auto_contrast,
+                "percentile_low": state.preprocess_percentile_low,
+                "percentile_high": state.preprocess_percentile_high,
+                "brightness": state.preprocess_brightness,
+                "contrast": state.preprocess_contrast,
+                "gamma": state.preprocess_gamma
+            }
+            seg_settings = {
+                "segmentation_method": state.segmentation_method,
+                "segmentation_model": state.segmentation_model,
+                "quality_mode": state.quality_mode
+            }
+            
+            export_summary_csv(
+                image_filename=filename,
+                quantifier_output=results,
+                preprocessing_settings=pre_settings,
+                segmentation_settings=seg_settings,
+                timestamp=timestamp,
+                file_path=file_path
+            )
+            logger.info("ResultsPage: Successfully exported Summary CSV: %s", file_path)
+            QMessageBox.information(self, "Export Complete", "Summary CSV exported successfully!")
+        except Exception as e:
+            logger.error("ResultsPage: Summary CSV export failed: %s", e, exc_info=True)
+            QMessageBox.critical(self, "Export Failed", f"Failed to export Summary CSV:\n{str(e)}")
 
     def _on_export_csv(self):
         results = state.analysis_results

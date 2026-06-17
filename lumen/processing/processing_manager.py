@@ -133,11 +133,11 @@ class AnalysisWorker(QThread):
             self.status_updated.emit("Executing Cellpose segmentation (inference)...")
             
             # Select active channel slice if in fluorescence workflow
-            from lumen.workflows.state import state
             input_arr = raw_arr
             eval_channels = channels
-            if state.current_workflow == "fluorescence" and raw_arr.ndim == 3:
-                seg_channel_idx = state.segmentation_channel
+            current_workflow = self.parameters.get("current_workflow") or self.parameters.get("workflow")
+            if current_workflow == "fluorescence" and raw_arr.ndim == 3:
+                seg_channel_idx = self.parameters.get("segmentation_channel", 0)
                 if seg_channel_idx >= 0 and seg_channel_idx < raw_arr.shape[2]:
                     input_arr = raw_arr[..., seg_channel_idx]
                     eval_channels = [0, 0] # Grayscale eval for single 2D slice
@@ -146,6 +146,16 @@ class AnalysisWorker(QThread):
             # Apply non-destructive preprocessing pipeline to segmentation input
             from lumen.processing.image_manager import image_manager
             input_arr = image_manager.preprocess_array(input_arr)
+
+            if current_workflow == "fluorescence":
+                seg_channel_idx = self.parameters.get("segmentation_channel", 0)
+                logger.info(
+                    "Fluorescence inference: raw shape=%s, input shape=%s, seg_channel=%s, dtype=%s",
+                    raw_arr.shape,
+                    input_arr.shape,
+                    seg_channel_idx,
+                    input_arr.dtype,
+                )
 
             logger.info("AnalysisWorker: Running model.eval on model_type='%s', gpu=%s, channels=%s, flow_threshold=%s, cellprob_threshold=%s, resample=%s", 
                         model_type, use_gpu, eval_channels, flow_threshold, cellprob_threshold, resample)
@@ -577,11 +587,11 @@ class BatchAnalysisWorker(QObject):
                 self.status_updated.emit(self.batch_token, "Executing Cellpose segmentation...")
 
                 # Select active channel slice if in fluorescence workflow
-                from lumen.workflows.state import state
                 input_arr = raw_arr
                 eval_channels = channels
-                if state.current_workflow == "fluorescence" and raw_arr.ndim == 3:
-                    seg_channel_idx = state.segmentation_channel
+                current_workflow = self.parameters.get("current_workflow") or self.parameters.get("workflow")
+                if current_workflow == "fluorescence" and raw_arr.ndim == 3:
+                    seg_channel_idx = self.parameters.get("segmentation_channel", 0)
                     if seg_channel_idx >= 0 and seg_channel_idx < raw_arr.shape[2]:
                         input_arr = raw_arr[..., seg_channel_idx]
                         eval_channels = [0, 0] # Grayscale eval for single 2D slice
@@ -590,6 +600,16 @@ class BatchAnalysisWorker(QObject):
                 # Apply non-destructive preprocessing pipeline to segmentation input
                 from lumen.processing.image_manager import image_manager
                 input_arr = image_manager.preprocess_array(input_arr)
+
+                if current_workflow == "fluorescence":
+                    seg_channel_idx = self.parameters.get("segmentation_channel", 0)
+                    logger.info(
+                        "Fluorescence inference: raw shape=%s, input shape=%s, seg_channel=%s, dtype=%s",
+                        raw_arr.shape,
+                        input_arr.shape,
+                        seg_channel_idx,
+                        input_arr.dtype,
+                    )
 
                 logger.info("BatchAnalysisWorker (token=%d): Running model.eval on model_type='%s', gpu=%s", 
                             self.batch_token, model_type, use_gpu)

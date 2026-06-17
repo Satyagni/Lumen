@@ -556,7 +556,7 @@ class TestLumenBatchPipeline(unittest.TestCase):
         explorer._on_open_analysis_clicked()
         
         # Verify state loaded
-        self.assertEqual(state.current_image_path, str(raw_img_path))
+        self.assertEqual(state.current_image_path, str(raw_img_path).replace('\\', '/'))
         self.assertEqual(state.quality_mode, "Balanced")
         self.assertIsNotNone(state.analysis_results)
         self.assertEqual(state.analysis_results["cell_count"], 25)

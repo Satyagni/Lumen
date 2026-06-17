@@ -38,6 +38,8 @@ class ImageManager:
         """Validates, loads, extracts metadata, and updates central state for an image."""
         if not file_path:
             return False, "Empty file path provided."
+        
+        file_path = file_path.replace('\\', '/')
 
         if not os.path.exists(file_path):
             return False, f"File does not exist: {file_path}"

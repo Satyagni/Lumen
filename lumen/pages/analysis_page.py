@@ -233,11 +233,13 @@ class InteractiveImageViewer(QGraphicsView):
             # Convert to QPixmap and apply to mask_item
             pixmap = QPixmap.fromImage(qimg)
             self.mask_item.setPixmap(pixmap)
-            self.mask_item.setVisible(True)
+            self.mask_item.setVisible(state.show_segmentation_overlay)
+            self.scene.update()
             logger.info("ImageViewer: Labeled mask overlay rendered. Shape: %dx%d, unique labels: %d", w, h, len(unique_labels) - 1)
         else:
             self.mask_item.setPixmap(QPixmap())
             self.mask_item.setVisible(False)
+            self.scene.update()
 
     def wheelEvent(self, event):
         """Handles zooming with mouse wheel scrolls."""
@@ -959,6 +961,11 @@ class AnalysisPage(QWidget):
         self.reset_changes_btn.setEnabled(is_dirty)
             
         session = state.workspace_manager.get_analysis_session(image_path)
+        logger.warning(
+            "TIMELINE [4. Before restoring Analysis]: state.current_workflow=%s, session.current_workflow=%s",
+            state.current_workflow,
+            session.current_workflow if session else None
+        )
         if session:
             # Check if session values match current state and page is already loaded
             state_matches_session = (
@@ -967,7 +974,7 @@ class AnalysisPage(QWidget):
                 state.show_original_image == session.show_original_image and
                 state.show_segmentation_overlay == session.show_segmentation_overlay and
                 state.segmentation_method == session.segmentation_method and
-                state.current_workflow == session.current_workflow and
+                state._current_workflow == session.current_workflow and
                 state.analysis_results is session.analysis_results
             )
             
@@ -1034,6 +1041,8 @@ class AnalysisPage(QWidget):
         # Only update committed_results if not dirty
         if not session.dirty:
             session.committed_results = state.analysis_results
+            session.committed_fluorescence_results = state.fluorescence_results
+            session.committed_fluorescence_summary = state.fluorescence_summary
         session.quality_mode = state.quality_mode
         session.mask_opacity = state.mask_opacity
         session.show_original_image = state.show_original_image
@@ -1055,7 +1064,14 @@ class AnalysisPage(QWidget):
         logger.info("AnalysisPage: Saved session state to workspace manager.")
 
     def _restore_from_session(self, session):
+        logger.warning(
+            "TIMELINE [5. Inside _restore_from_session - Before]: session.current_workflow=%s, state.current_workflow=%s",
+            session.current_workflow,
+            state.current_workflow
+        )
         path = session.image_path
+        if path:
+            path = path.replace('\\', '/')
         if path and os.path.exists(path):
             if image_manager._current_path != path:
                 image_manager.load_image(path)
@@ -1109,6 +1125,11 @@ class AnalysisPage(QWidget):
                 self._loaded_image_path = path
                 self._loaded_image_origin = state.current_origin_type
                 self.force_layout_refresh()
+        logger.warning(
+            "TIMELINE [5. Inside _restore_from_session - After]: session.current_workflow=%s, state.current_workflow=%s",
+            session.current_workflow,
+            state.current_workflow
+        )
 
     # Slots to update state from controls
     def _on_show_original_toggled(self, checked: bool):
@@ -1177,6 +1198,8 @@ class AnalysisPage(QWidget):
 
     @Slot(str)
     def _on_image_loaded(self, path: str):
+        if path:
+            path = path.replace('\\', '/')
         if path and os.path.exists(path):
             if image_manager._current_path != path:
                 image_manager.load_image(path)
@@ -1192,6 +1215,9 @@ class AnalysisPage(QWidget):
                     masks = state.analysis_results.get("masks")
                     if masks is not None:
                         self.image_viewer.set_masks(masks)
+                        self.image_viewer.set_show_original(state.show_original_image)
+                        self.image_viewer.set_show_overlay(state.show_segmentation_overlay)
+                        self.image_viewer.set_mask_opacity(state.mask_opacity)
                         self.edit_btn.setEnabled(True)
                     else:
                         self.edit_btn.setEnabled(False)
@@ -1234,6 +1260,12 @@ class AnalysisPage(QWidget):
 
     @Slot(str)
     def _on_workflow_selected(self, wf_id: str):
+        logger.warning(
+            "TIMELINE [6. Inside _on_workflow_selected]: argument wf_id=%s, sender=%s, current combobox value=%s",
+            wf_id,
+            self.sender(),
+            self.wf_combo.currentData()
+        )
         # Update combobox selection silently
         self.wf_combo.blockSignals(True)
         idx = self.wf_combo.findData(wf_id)
@@ -1320,6 +1352,86 @@ class AnalysisPage(QWidget):
         self.model_combo.setCurrentText(val)
         self.model_combo.blockSignals(False)
 
+    def _run_fluorescence_quantification(self, results_dict: dict = None):
+        """Runs the standalone fluorescence quantification on the active image and mask."""
+        if state.current_workflow != "fluorescence":
+            return
+            
+        res = results_dict if results_dict is not None else state.analysis_results
+        masks = res.get("masks") if res else None
+        if masks is None:
+            logger.info("AnalysisPage: No mask available for fluorescence quantification.")
+            state.fluorescence_results = []
+            state.fluorescence_summary = {}
+            return
+            
+        from lumen.processing.image_manager import image_manager
+        raw_channels = image_manager._raw_channels
+        if not raw_channels:
+            logger.info("AnalysisPage: No raw channels loaded for fluorescence quantification.")
+            state.fluorescence_results = []
+            state.fluorescence_summary = {}
+            return
+            
+        # Get channel names
+        channel_names = state.channel_names
+        if not channel_names or len(channel_names) != len(raw_channels):
+            channel_names = image_manager._channel_names
+            
+        from lumen.core.fluorescence.quantifier import quantify_fluorescence
+        try:
+            results = quantify_fluorescence(
+                raw_channels=raw_channels,
+                masks=masks,
+                channel_names=channel_names
+            )
+            state.fluorescence_results = results
+            
+            # Calculate and store summary stats
+            if results:
+                # Infer channels from results[0]
+                channels = []
+                for key in results[0].keys():
+                    if key.endswith("_mean"):
+                        channels.append(key[:-5])
+                        
+                avg_area = float(np.mean([r["area"] for r in results]))
+                summary = {
+                    "total_cell_count": len(results),
+                    "average_area": avg_area,
+                }
+                for ch in channels:
+                    mean_key = f"{ch}_mean"
+                    median_key = f"{ch}_median"
+                    mean_vals = [r[mean_key] for r in results if mean_key in r]
+                    median_vals = [r[median_key] for r in results if median_key in r]
+                    summary[f"{ch}_mean_average"] = float(np.mean(mean_vals)) if mean_vals else 0.0
+                    summary[f"{ch}_median_average"] = float(np.mean(median_vals)) if median_vals else 0.0
+                state.fluorescence_summary = summary
+            else:
+                state.fluorescence_summary = {
+                    "total_cell_count": 0,
+                    "average_area": 0.0
+                }
+            logger.info("AnalysisPage: Fluorescence quantification completed successfully.")
+            
+        except ValueError as e:
+            logger.error("AnalysisPage: Fluorescence quantification failed (shape mismatch): %s", e)
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                self,
+                "Quantification Error",
+                f"Fluorescence quantification failed:\n{str(e)}",
+                QMessageBox.Ok
+            )
+            state.fluorescence_results = []
+            state.fluorescence_summary = {}
+            raise e
+        except Exception as e:
+            logger.error("AnalysisPage: Fluorescence quantification failed: %s", e, exc_info=True)
+            state.fluorescence_results = []
+            state.fluorescence_summary = {}
+
     def _set_controls_enabled(self, enabled: bool):
         self.method_combo.setEnabled(enabled)
         self.model_combo.setEnabled(enabled)
@@ -1336,6 +1448,30 @@ class AnalysisPage(QWidget):
                 QMessageBox.Ok
             )
             return
+
+        # Guard: Check image dimensionality and channel boundaries if workflow is fluorescence
+        if state.current_workflow == "fluorescence":
+            from lumen.processing.image_manager import image_manager
+            raw_arr = image_manager._raw_numpy_arr
+            if raw_arr is None:
+                QMessageBox.critical(
+                    self,
+                    "No Image Data",
+                    "No image data is loaded in the workspace.",
+                    QMessageBox.Ok
+                )
+                return
+
+            available_channels = raw_arr.shape[2] if raw_arr.ndim == 3 else 1
+            seg_channel = state.segmentation_channel
+            if not isinstance(seg_channel, int) or not (0 <= seg_channel < available_channels):
+                QMessageBox.critical(
+                    self,
+                    "Invalid Channel Selected",
+                    f"Selected segmentation channel {seg_channel} is out of bounds for the image with {available_channels} channels.",
+                    QMessageBox.Ok
+                )
+                return
 
         # Disable buttons/combo to prevent double execution and prepare progress display
         self.run_btn.setEnabled(False)
@@ -1368,7 +1504,9 @@ class AnalysisPage(QWidget):
         parameters = {
             "segmentation_method": state.segmentation_method,
             "quality_mode": state.quality_mode,
-            "model_type_override": model_override
+            "model_type_override": model_override,
+            "current_workflow": state.current_workflow,
+            "segmentation_channel": state.segmentation_channel
         }
 
         success = processing_manager.run_analysis(image_path, parameters, callbacks)
@@ -1407,6 +1545,12 @@ class AnalysisPage(QWidget):
         self.progress_bar.setVisible(False)
         self.force_layout_refresh()
         
+        if state.current_workflow == "fluorescence":
+            try:
+                self._run_fluorescence_quantification(results)
+            except ValueError:
+                pass
+
         # Populate results_dict into the state
         state.analysis_results = results
         self.image_viewer.set_analysis_results(results)
@@ -1460,6 +1604,12 @@ class AnalysisPage(QWidget):
         if page_name == "analysis":
             self._sync_state()
         else:
+            sess = state.workspace_manager.get_analysis_session(state.current_image_path) if state.current_image_path else None
+            logger.warning(
+                "TIMELINE [1. Before leaving Analysis]: state.current_workflow=%s, session.current_workflow=%s",
+                state.current_workflow,
+                sess.current_workflow if sess else None
+            )
             self._save_to_session()
 
     @Slot()
@@ -1520,6 +1670,12 @@ class AnalysisPage(QWidget):
                 if editor.has_unsaved_changes():
                     state.is_dirty = True
 
+                if state.current_workflow == "fluorescence":
+                    try:
+                        self._run_fluorescence_quantification(updated_results)
+                    except ValueError:
+                        pass
+
                 # Save session checkpoint
                 self._save_to_session()
                 
@@ -1578,6 +1734,8 @@ class AnalysisPage(QWidget):
         if session:
             session.analysis_results = results
             session.committed_results = results
+            session.committed_fluorescence_results = state.fluorescence_results
+            session.committed_fluorescence_summary = state.fluorescence_summary
         
         # Behavior depends on ORIGIN CONTEXT
         if state.current_origin_type == "batch":
@@ -1760,6 +1918,8 @@ class AnalysisPage(QWidget):
         session = state.workspace_manager.get_analysis_session(image_path)
         if session:
             session.committed_results = results
+            session.committed_fluorescence_results = state.fluorescence_results
+            session.committed_fluorescence_summary = state.fluorescence_summary
         return True
 
     @Slot()
@@ -1802,6 +1962,13 @@ class AnalysisPage(QWidget):
             
         # Revert in-memory results to committed_results
         committed = session.committed_results
+        committed_fluor = getattr(session, "committed_fluorescence_results", {})
+        committed_summary = getattr(session, "committed_fluorescence_summary", {})
+        session.fluorescence_results = committed_fluor
+        session.fluorescence_summary = committed_summary
+        state.fluorescence_results = committed_fluor
+        state.fluorescence_summary = committed_summary
+
         state.analysis_results = committed
         session.analysis_results = committed
         

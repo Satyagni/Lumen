@@ -5,7 +5,7 @@ from lumen.core.logger import logger
 class AnalysisSession:
     """Stores persistent state for a specific microscopy analysis session."""
     def __init__(self, image_path: str, origin_type: str = "single", batch_origin_context: Optional[str] = None):
-        self.image_path = image_path
+        self.image_path = image_path.replace('\\', '/') if image_path else ""
         self.origin_type = origin_type
         self.batch_origin_context = batch_origin_context
         self.dirty = False
@@ -27,6 +27,9 @@ class AnalysisSession:
         self.background_mode = "None"
         self.background_params = {"offset": 2, "thickness": 4}
         self.fluorescence_results = {}
+        self.fluorescence_summary = {}
+        self.committed_fluorescence_results = {}
+        self.committed_fluorescence_summary = {}
         self.heatmap_cache = {}
         self.active_metric = "mean"
         
@@ -95,13 +98,18 @@ class WorkspaceManager(QObject):
         norm_path = self._normalize_path(image_path)
         key = (norm_path, origin_type)
         if key not in self._analysis_sessions:
-            self._analysis_sessions[key] = AnalysisSession(image_path, origin_type, batch_origin_context)
+            self._analysis_sessions[key] = AnalysisSession(norm_path, origin_type, batch_origin_context)
             logger.info("WorkspaceManager: Started fresh AnalysisSession for %s with origin %s", norm_path, origin_type)
         self._active_analysis_path = norm_path
         self._active_analysis_origin = origin_type
         return self._analysis_sessions[key]
 
     def reset_analysis_session(self, image_path: str = None, origin_type: Optional[str] = None):
+        logger.warning(
+            "TIMELINE [8. WorkspaceManager.reset_analysis_session]: image_path=%s, origin_type=%s",
+            image_path,
+            origin_type
+        )
         """Clears the specified analysis session, or all if none provided."""
         if image_path:
             norm_path = self._normalize_path(image_path)
@@ -230,6 +238,7 @@ class AppState(QObject):
         self._background_mode = "None"
         self._background_params = {"offset": 2, "thickness": 4}
         self._fluorescence_results = {}
+        self._fluorescence_summary = {}
         self._heatmap_cache = {}
         self._active_metric = "mean"
 
@@ -250,14 +259,15 @@ class AppState(QObject):
 
     @current_image_path.setter
     def current_image_path(self, path: str):
-        if self._current_image_path != path:
+        normalized = path.replace('\\', '/') if path else None
+        if self._current_image_path != normalized:
             if self.is_dirty:
                 self.revert_to_last_committed_state()
-            if path:
+            if normalized:
                 self.reset_analysis_session()
-            self._current_image_path = path
-            logger.info("AppState: image path updated: %s", path)
-            self.image_loaded.emit(path or "")
+            self._current_image_path = normalized
+            logger.info("AppState: image path updated: %s", normalized)
+            self.image_loaded.emit(normalized or "")
 
     @property
     def is_dirty(self) -> bool:
@@ -304,12 +314,14 @@ class AppState(QObject):
 
     @current_workflow.setter
     def current_workflow(self, workflow_name: str):
+        if self._current_image_path and workflow_name:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session and session.current_workflow != workflow_name:
+                session.current_workflow = workflow_name
+                logger.info("AppState: synchronized session workflow to: %s", workflow_name)
+
         if self._current_workflow != workflow_name:
             self._current_workflow = workflow_name
-            if self._current_image_path:
-                session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
-                if session:
-                    session.current_workflow = workflow_name
             logger.info("AppState: workflow selected: %s", workflow_name)
             self.workflow_selected.emit(workflow_name or "")
 
@@ -511,6 +523,13 @@ class AppState(QObject):
             session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
             if session and session.dirty:
                 committed = session.committed_results
+                committed_fluor = getattr(session, "committed_fluorescence_results", {})
+                committed_summary = getattr(session, "committed_fluorescence_summary", {})
+                session.fluorescence_results = committed_fluor
+                session.fluorescence_summary = committed_summary
+                self._fluorescence_results = committed_fluor
+                self._fluorescence_summary = committed_summary
+
                 session.analysis_results = committed
                 self._analysis_results = committed
                 session.dirty = False
@@ -520,6 +539,9 @@ class AppState(QObject):
                 self.manual_mask_saved.emit(self._current_image_path)
 
     def reset_analysis_session(self):
+        logger.warning(
+            "TIMELINE [8. AppState.reset_analysis_session]"
+        )
         """Resets all transient analysis configurations to defaults for a new image."""
         logger.info("AppState: Resetting transient analysis session variables.")
         self._quality_mode = "Balanced"
@@ -537,6 +559,7 @@ class AppState(QObject):
         self._background_mode = "None"
         self._background_params = {"offset": 2, "thickness": 4}
         self._fluorescence_results = {}
+        self._fluorescence_summary = {}
         self._heatmap_cache = {}
         self._active_metric = "mean"
 
@@ -666,6 +689,22 @@ class AppState(QObject):
             session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
             if session:
                 session.fluorescence_results = val
+
+    @property
+    def fluorescence_summary(self) -> dict:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                return getattr(session, "fluorescence_summary", {})
+        return self._fluorescence_summary
+
+    @fluorescence_summary.setter
+    def fluorescence_summary(self, val: dict):
+        self._fluorescence_summary = val
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                session.fluorescence_summary = val
 
     @property
     def heatmap_cache(self) -> dict:

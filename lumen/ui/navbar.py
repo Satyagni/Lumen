@@ -162,6 +162,10 @@ class NavbarWidget(QFrame):
 
     @Slot(str)
     def _on_workflow_selected(self, wf_id: str):
+        logger.warning(
+            "TIMELINE [7. Navbar _on_workflow_selected]: emitted wf_id=%s",
+            wf_id
+        )
         wf = workflow_manager.get_workflow(wf_id)
         if wf:
             self.wf_val_lbl.setText(wf.name)

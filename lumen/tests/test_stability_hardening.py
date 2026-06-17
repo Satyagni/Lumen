@@ -98,7 +98,7 @@ class TestStabilityHardening(unittest.TestCase):
         upload_page._on_proceed_clicked()
 
         # 7. Now verify global state has been mutated
-        self.assertEqual(state.current_image_path, img_path)
+        self.assertEqual(state.current_image_path, img_path.replace('\\', '/'))
         self.assertEqual(state.current_workflow, "cell_counting")
 
     def test_recursive_layout_updates(self):

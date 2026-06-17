@@ -1217,8 +1217,15 @@ class BatchResultsExplorerPage(QWidget):
             batch_origin_context=str(self.batch_dir)
         )
         
-        # Set workflow and quality mode
-        state.current_workflow = record.get("workflow", "cell_counting")
+        # Set workflow and quality mode (resolve user-facing name back to ID if needed)
+        wf_val = record.get("workflow", "cell_counting")
+        from lumen.workflows.workflow_manager import workflow_manager
+        if wf_val not in workflow_manager.workflows:
+            for wf_id, wf in workflow_manager.workflows.items():
+                if wf.name == wf_val:
+                    wf_val = wf_id
+                    break
+        state.current_workflow = wf_val
         state.quality_mode = record.get("segmentation_mode", "Balanced")
         # Set analysis results last so they are preserved
         state.analysis_results = results

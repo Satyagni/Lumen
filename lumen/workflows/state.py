@@ -33,6 +33,10 @@ class AnalysisSession:
         self.heatmap_cache = {}
         self.active_metric = "mean"
         
+        # Puncta session attributes (Phase 4 Architectural Foundation)
+        from lumen.core.puncta.config import PunctaParameters
+        self.puncta_settings = PunctaParameters()
+        
         # Preprocessing session attributes
         self.preprocess_auto_contrast = True
         self.preprocess_percentile_low = 1.0
@@ -202,6 +206,9 @@ class AppState(QObject):
     # Preprocessing Signals
     preprocessing_changed = Signal()
 
+    # Puncta Signals (Phase 4 Architectural Foundation)
+    puncta_settings_changed = Signal()
+
     def __init__(self):
         super().__init__()
         # Workspace Session Manager
@@ -249,6 +256,10 @@ class AppState(QObject):
         self._preprocess_brightness = 0.0
         self._preprocess_contrast = 1.0
         self._preprocess_gamma = 1.0
+
+        # Puncta State Caching (Phase 4 Architectural Foundation)
+        from lumen.core.puncta.config import PunctaParameters
+        self._puncta_settings = PunctaParameters()
 
 
     # Getters and Setters with Logging and Signaling
@@ -571,6 +582,10 @@ class AppState(QObject):
         self._preprocess_contrast = 1.0
         self._preprocess_gamma = 1.0
 
+        # Reset puncta transient parameters (Phase 4 Architectural Foundation)
+        from lumen.core.puncta.config import PunctaParameters
+        self._puncta_settings = PunctaParameters()
+
         # Clear workspace manager session as well
         self.workspace_manager.reset_analysis_session()
         
@@ -587,6 +602,7 @@ class AppState(QObject):
         self.background_correction_changed.emit()
 
         self.preprocessing_changed.emit()
+        self.puncta_settings_changed.emit()
         self.analysis_completed.emit({})
 
     @property
@@ -839,6 +855,23 @@ class AppState(QObject):
             if session:
                 session.preprocess_gamma = val
         self.preprocessing_changed.emit()
+
+    @property
+    def puncta_settings(self) -> Any:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                return getattr(session, "puncta_settings", self._puncta_settings)
+        return self._puncta_settings
+
+    @puncta_settings.setter
+    def puncta_settings(self, val: Any):
+        self._puncta_settings = val
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                session.puncta_settings = val
+        self.puncta_settings_changed.emit()
 
 # Global instance of AppState
 state = AppState()

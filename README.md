@@ -20,12 +20,13 @@ Modern biological research generates massive amounts of microscopy imaging data 
 
 ---
 
-## Core Features (v0.3.0)
+## Core Features (v0.4.0)
 
 ### Deep Learning & Image Handling
 - **Cellpose-Powered Microscopy Segmentation**: Native integration with local Cellpose v3.0+ deep learning model evaluations.
+- **Zeiss CZI Format Support (Single Image)**: Factory-constructed `CziReader` integration with direct memory copies of NumPy array buffers to guarantee safety and eliminate C++ memory segmentation faults.
 - **Intelligent Modality & Routing**: Automatically inspects file metadata and pixel arrays on import to determine imaging modality (e.g., Fluorescence Microscopy, Brightfield Microscopy) and routes them to DAPI nuclei stains (nuclei model) or GFP cell bodies (cyto model).
-- **16-bit to 8-bit Normalization**: Scales 16-bit high-dynamic-range TIFF microscopy images down to 8-bit display buffers using 1st/99th percentile contrast-stretching with division-by-zero safeguards.
+- **16-bit to 8-bit Normalization**: Scales 16-bit high-dynamic-range TIFF/CZI microscopy images down to 8-bit display buffers using 1st/99th percentile contrast-stretching with division-by-zero safeguards.
 - **Multi-Channel TIFF & Channel-Aware Support**: Complete support for multi-channel TIFF images and a channel-aware image processing pipeline.
 - **Flexible Channel Mapping**: Map arbitrary image channels to target fluorophores (such as DAPI, GFP, RFP) with dynamic composite rendering.
 - **Segmentation Channel Selection**: Choose which specific channel drives the Cellpose deep learning segmentation.
@@ -91,21 +92,38 @@ Lumen extracts high-precision pixel-based and contour-based measurements for eac
 
 ---
 
-## Known Limitations (v0.3)
+## Known Limitations (v0.4.0)
 
+- **CZI Batch Support**: CZI file ingestion is currently limited to the Single Image Explorer. Batch uploads of `.czi` files are unsupported.
+- **Fluorescence Batch Support**: Batch mode does not support dynamic multi-channel fluorescence naming or quantification; attempting to run fluorescence quantification in batch mode is currently unsupported and needs appropriate validation policing.
+- **Puncta UI Integration**: The Difference of Gaussians (DoG) puncta detection and cell assignment backend is fully implemented and validated with unit tests, but is pending final UI integration and frontend pipeline configuration.
 - **Pause to Resume Throughput**: Pause to Resume transitions may temporarily reduce throughput for the first image(s) before returning to normal processing speed.
 - **Manual Mask Editor Toolbar**: Toolbar scaling can visually break or overlap on certain non-default window sizes or aspect ratios.
-- **Mask Editor Layout**: Layout responsiveness under extreme aspect ratio resizes is pending final visual polish.
-- **StarDist Integration**: Routing hooks exist in the routing engine, but the StarDist library backend has not yet been integrated into the thread worker.
+
+---
+
+## Detailed Architecture of New Additions
+
+### 1. Format-Agnostic Image Readers & CZI Memory Safety
+Lumen v0.4.0 introduces a decoupled `ImageReader` architecture managed by an `ImageReaderFactory`. This provides unified metadata extraction (such as physical pixel size scaling in microns and channel names) across formats:
+- **`TiffReader`**: Processes single and multi-channel TIFF/TIF files using `tifffile`.
+- **`PilReader`**: Handles standard compressed imagery (PNG, JPEG, BMP).
+- **`CziReader`**: Interfaces with Zeiss CZI files using python bindings for `libCZI`.
+- **Memory-Safety Layer**: Addresses native memory access violations by enforcing an explicit `.copy()` operation on the NumPy buffers retrieved from the C++ library, ensuring the resulting arrays own their allocations and can safely outlive the reader instance.
+
+### 2. Puncta Quantification Backend
+A complete subcellular spot detection engine has been added under `lumen/core/puncta`:
+- **Detection (`detector.py`)**: Utilizes Difference of Gaussians (DoG) bandpass filtering to isolate punctate structures, followed by local maxima peak-finding.
+- **Assignment (`assignment.py`)**: Maps detected spot coordinates to parent cells by executing ray-casting point-in-polygon tests on segmented contour masks.
+- **Quantification (`measurements.py`)**: Computes morphology (centroid, radius) and intensity metrics (mean, min, max, integrated intensity) for each spot.
 
 ---
 
 ## Roadmap
 
-### v0.4 Milestone: Completion of the Fluorescence Pipeline
-1. **Background Correction**: Implement automated fluorescence background subtraction algorithms (such as global background correction and local ring background correction) to correct excitation and shading anomalies.
-2. **Heatmaps**: Integrate interactive spatial heatmaps overlaying individual cell intensity levels or morphological properties directly onto the multi-channel canvas.
-3. **Population Analytics**: Add a graphical workspace featuring real-time population plots (scatter plots and histograms) to analyze relationships (e.g., cell area vs. mean fluorophore expression).
-4. **Positive/Negative Classification**: Introduce analytical gating and intensity thresholding to classify cells as positive or negative for specific markers.
-5. **Advanced Fluorescence Visualization**: Support sophisticated multi-channel rendering features, including custom color blending curves, transparency/overlay controls, and multi-channel false-coloring.
-6. **Multi-File Channel Grouping**: Provide batch processing controls for aligning, grouping, and comparing multi-channel cohorts across separate microscopy files.
+### v0.5 Milestone: Subcellular Puncta & UI Integration
+1. **Puncta Frontend UI**: Integrate the spot detection parameters and visualization overlays (e.g. colored circular indicators) into the ImageViewer canvas.
+2. **Background Correction**: Implement automated fluorescence background subtraction algorithms (such as global background correction and local ring background correction).
+3. **Spatial Heatmaps**: Integrate interactive spatial heatmaps overlaying individual cell intensity levels or morphological properties.
+4. **Population Analytics**: Add a graphical workspace featuring real-time population plots (scatter plots and histograms).
+5. **Gated Marker Classification**: Introduce intensity thresholding to classify cells as positive or negative for specific markers.

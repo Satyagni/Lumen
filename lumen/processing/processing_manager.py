@@ -35,14 +35,16 @@ class AnalysisWorker(QThread):
                 raw_arr = None
 
             if raw_arr is None:
-                import tifffile
-                import PIL.Image
-                ext = Path(self.image_path).suffix.lower()
-                if ext in [".tif", ".tiff"]:
-                    raw_arr = tifffile.imread(self.image_path)
+                from lumen.core.imaging import ImageReaderFactory
+                reader = ImageReaderFactory.get_reader(self.image_path)
+                reader.open(self.image_path)
+                meta = reader.get_metadata()
+                raw_channels = [reader.read_slice(channel=c).image for c in range(meta.channels)]
+                if len(raw_channels) == 1:
+                    raw_arr = raw_channels[0]
                 else:
-                    with PIL.Image.open(self.image_path) as pil_img:
-                        raw_arr = np.asarray(pil_img)
+                    raw_arr = np.stack(raw_channels, axis=-1)
+                reader.close()
             
             if raw_arr is None or raw_arr.size == 0:
                 raise ValueError("Could not access or load raw image array.")
@@ -132,30 +134,28 @@ class AnalysisWorker(QThread):
             # Step 4: Execute Cellpose safely
             self.status_updated.emit("Executing Cellpose segmentation (inference)...")
             
-            # Select active channel slice if in fluorescence workflow
+            # Select active channel slice if image has multiple channels
             input_arr = raw_arr
             eval_channels = channels
-            current_workflow = self.parameters.get("current_workflow") or self.parameters.get("workflow")
-            if current_workflow == "fluorescence" and raw_arr.ndim == 3:
+            if raw_arr.ndim == 3:
                 seg_channel_idx = self.parameters.get("segmentation_channel", 0)
                 if seg_channel_idx >= 0 and seg_channel_idx < raw_arr.shape[2]:
                     input_arr = raw_arr[..., seg_channel_idx]
                     eval_channels = [0, 0] # Grayscale eval for single 2D slice
-                    logger.info("AnalysisWorker: Fluorescence mode active. Segmenting channel index %d as grayscale.", seg_channel_idx)
+                    logger.info("AnalysisWorker: Segmenting channel index %d as grayscale.", seg_channel_idx)
 
             # Apply non-destructive preprocessing pipeline to segmentation input
             from lumen.processing.image_manager import image_manager
             input_arr = image_manager.preprocess_array(input_arr)
 
-            if current_workflow == "fluorescence":
-                seg_channel_idx = self.parameters.get("segmentation_channel", 0)
-                logger.info(
-                    "Fluorescence inference: raw shape=%s, input shape=%s, seg_channel=%s, dtype=%s",
-                    raw_arr.shape,
-                    input_arr.shape,
-                    seg_channel_idx,
-                    input_arr.dtype,
-                )
+            seg_channel_idx = self.parameters.get("segmentation_channel", 0)
+            logger.info(
+                "Cellpose inference preparation: raw shape=%s, input shape=%s, seg_channel=%s, dtype=%s",
+                raw_arr.shape,
+                input_arr.shape,
+                seg_channel_idx,
+                input_arr.dtype,
+            )
 
             logger.info("AnalysisWorker: Running model.eval on model_type='%s', gpu=%s, channels=%s, flow_threshold=%s, cellprob_threshold=%s, resample=%s", 
                         model_type, use_gpu, eval_channels, flow_threshold, cellprob_threshold, resample)
@@ -375,16 +375,11 @@ class BatchAnalysisWorker(QObject):
             median_area = float(np.median(areas)) if areas else 0.0
             avg_diameter = float(np.mean(diameters)) if diameters else 0.0
             
-            import PIL.Image
-            import tifffile
-            ext = Path(image_path).suffix.lower()
-            if ext in [".tif", ".tiff"]:
-                with tifffile.TiffFile(image_path) as tif:
-                    shape = tif.series[0].shape
-            else:
-                with PIL.Image.open(image_path) as img:
-                    size = img.size
-                    shape = (size[1], size[0])
+            from lumen.core.imaging import ImageReaderFactory
+            reader = ImageReaderFactory.get_reader(image_path)
+            reader.open(image_path)
+            shape = reader.get_metadata().dimensions
+            reader.close()
             
             h, w = shape[:2]
             density = cell_count / (h * w) if h * w > 0 else 0.0
@@ -488,14 +483,16 @@ class BatchAnalysisWorker(QObject):
                     raw_arr = None
 
                 if raw_arr is None:
-                    import tifffile
-                    import PIL.Image
-                    ext = Path(image_path).suffix.lower()
-                    if ext in [".tif", ".tiff"]:
-                        raw_arr = tifffile.imread(image_path)
+                    from lumen.core.imaging import ImageReaderFactory
+                    reader = ImageReaderFactory.get_reader(image_path)
+                    reader.open(image_path)
+                    meta = reader.get_metadata()
+                    raw_channels = [reader.read_slice(channel=c).image for c in range(meta.channels)]
+                    if len(raw_channels) == 1:
+                        raw_arr = raw_channels[0]
                     else:
-                        with PIL.Image.open(image_path) as pil_img:
-                            raw_arr = np.asarray(pil_img)
+                        raw_arr = np.stack(raw_channels, axis=-1)
+                    reader.close()
                 
                 if raw_arr is None or raw_arr.size == 0:
                     raise ValueError("Could not access or load raw image array.")

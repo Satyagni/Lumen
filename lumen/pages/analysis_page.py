@@ -1,9 +1,9 @@
 import os
 import numpy as np
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFrame, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QMessageBox, QSizePolicy, QGridLayout, QProgressBar, QComboBox, QCheckBox, QSlider, QScrollArea
+    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFrame, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QMessageBox, QSizePolicy, QGridLayout, QProgressBar, QComboBox, QCheckBox, QSlider, QScrollArea, QSplitter, QSpinBox, QDoubleSpinBox
 )
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, QSettings
 from PySide6.QtGui import QPixmap, QPainter, QCursor
 from lumen.core.logger import logger
 from lumen.workflows.state import state
@@ -11,6 +11,130 @@ from lumen.processing.image_manager import image_manager
 from lumen.processing.processing_manager import processing_manager
 from lumen.workflows.workflow_manager import workflow_manager
 from lumen.core.services.theme_service import theme_service
+from lumen.core.services.gpu_service import gpu_service
+
+# UI Spacing System
+UI_SPACING_XS = 8   # Micro elements, compact layouts
+UI_SPACING_SM = 12  # Element grouping padding
+UI_SPACING_MD = 16  # Card padding, column margins
+UI_SPACING_LG = 24  # Outer margins, page spacing
+
+# Theme Colors (Default Dark Mode)
+COLOR_BACKGROUND = "#0B0B0D"
+COLOR_CARD = "#17171C"
+COLOR_BORDER = "rgba(255, 255, 255, 0.06)"
+COLOR_TEXT_PRIMARY = "#FFFFFF"
+COLOR_TEXT_SECONDARY = "#9EA4B0"
+COLOR_ACCENT = "#6366F1"
+
+class FocusWheelComboBox(QComboBox):
+    """QComboBox subclass that only consumes mouse wheel events when focused."""
+    def wheelEvent(self, e):
+        if self.hasFocus():
+            super().wheelEvent(e)
+        else:
+            e.ignore()
+
+class FocusWheelSlider(QSlider):
+    """QSlider subclass that only consumes mouse wheel events when focused."""
+    def wheelEvent(self, e):
+        if self.hasFocus():
+            super().wheelEvent(e)
+        else:
+            e.ignore()
+
+class FocusWheelSpinBox(QSpinBox):
+    """QSpinBox subclass that only consumes mouse wheel events when focused."""
+    def wheelEvent(self, e):
+        if self.hasFocus():
+            super().wheelEvent(e)
+        else:
+            e.ignore()
+
+class FocusWheelDoubleSpinBox(QDoubleSpinBox):
+    """QDoubleSpinBox subclass that only consumes mouse wheel events when focused."""
+    def wheelEvent(self, e):
+        if self.hasFocus():
+            super().wheelEvent(e)
+        else:
+            e.ignore()
+
+class AnalysisParameterCard(QFrame):
+    """Standardized scientific parameter section card layout."""
+    def __init__(self, title: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("AnalysisParameterCard")
+        self.setStyleSheet(f"""
+            #AnalysisParameterCard {{
+                background-color: {COLOR_CARD};
+                border: 1px solid {COLOR_BORDER};
+                border-radius: 8px;
+            }}
+        """)
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(UI_SPACING_SM, UI_SPACING_SM, UI_SPACING_SM, UI_SPACING_SM)
+        self.layout.setSpacing(UI_SPACING_XS)
+        
+        self.header = QLabel(title)
+        self.header.setStyleSheet("font-weight: bold; font-size: 11px; color: #5BE7FF; text-transform: uppercase; letter-spacing: 0.5px;")
+        self.layout.addWidget(self.header)
+
+class CollapsibleSection(QWidget):
+    """Instant open/close panel without animation delays."""
+    def __init__(self, title: str, parent=None):
+        super().__init__(parent)
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(0)
+        
+        self.toggle_btn = QPushButton(f"▼ {title}")
+        self.toggle_btn.setCheckable(True)
+        self.toggle_btn.setChecked(True)
+        self.toggle_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        self.toggle_btn.setStyleSheet("""
+            QPushButton {
+                text-align: left;
+                font-weight: bold;
+                font-size: 11px;
+                color: #FFFFFF;
+                background-color: #24242D;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 4px;
+                padding: 8px 12px;
+            }
+            QPushButton:hover {
+                background-color: #2D2D37;
+            }
+            QPushButton:checked {
+                border-bottom-left-radius: 0px;
+                border-bottom-right-radius: 0px;
+            }
+        """)
+        self.layout.addWidget(self.toggle_btn)
+        
+        self.content_frame = QFrame()
+        self.content_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLOR_CARD};
+                border: 1px solid {COLOR_BORDER};
+                border-top: none;
+                border-bottom-left-radius: 4px;
+                border-bottom-right-radius: 4px;
+            }}
+        """)
+        self.content_layout = QVBoxLayout(self.content_frame)
+        self.content_layout.setContentsMargins(UI_SPACING_SM, UI_SPACING_SM, UI_SPACING_SM, UI_SPACING_SM)
+        self.content_layout.setSpacing(UI_SPACING_XS)
+        self.layout.addWidget(self.content_frame)
+        
+        self.toggle_btn.toggled.connect(self._on_toggle)
+        
+    def set_content(self, widget: QWidget):
+        self.content_layout.addWidget(widget)
+
+    def _on_toggle(self, checked: bool):
+        self.content_frame.setVisible(checked)
+        self.toggle_btn.setText(f"▼ {self.toggle_btn.text()[2:]}" if checked else f"▶ {self.toggle_btn.text()[2:]}")
 
 class AnalysisPlaceholderWidget(QFrame):
     """Elegant scientific placeholder shown when no image is active in the viewer."""
@@ -141,7 +265,7 @@ class InteractiveImageViewer(QGraphicsView):
         self.setDragMode(QGraphicsView.NoDrag)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setStyleSheet("background-color: #0B0B0D; border: 1px solid #2B2B35; border-radius: 6px;")
+        self.setStyleSheet("background-color: #000000; border: 1px solid #2B2B35; border-radius: 6px;")
 
         # Anchor transformation under mouse for intuitive scientific inspection zooming
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
@@ -155,6 +279,37 @@ class InteractiveImageViewer(QGraphicsView):
         
         # Premium Empty State Placeholder
         self._placeholder = AnalysisPlaceholderWidget(self)
+
+        # Loading Overlay (overlay frame)
+        self.loading_overlay = QFrame(self)
+        self.loading_overlay.setObjectName("ViewerLoadingOverlay")
+        self.loading_overlay.setStyleSheet("""
+            #ViewerLoadingOverlay {
+                background-color: rgba(11, 11, 13, 0.85);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 6px;
+            }
+        """)
+        overlay_layout = QVBoxLayout(self.loading_overlay)
+        overlay_layout.setAlignment(Qt.AlignCenter)
+        overlay_layout.setSpacing(10)
+        
+        self.loading_icon = QLabel("⚡")
+        self.loading_icon.setStyleSheet("font-size: 32px; color: #6366F1;")
+        self.loading_icon.setAlignment(Qt.AlignCenter)
+        overlay_layout.addWidget(self.loading_icon)
+        
+        self.loading_text = QLabel("Analyzing image...")
+        self.loading_text.setStyleSheet("color: #FFFFFF; font-size: 13px; font-weight: bold;")
+        self.loading_text.setAlignment(Qt.AlignCenter)
+        overlay_layout.addWidget(self.loading_text)
+        
+        self.loading_subtext = QLabel("GPU Active")
+        self.loading_subtext.setStyleSheet("color: #9EA4B0; font-size: 11px;")
+        self.loading_subtext.setAlignment(Qt.AlignCenter)
+        overlay_layout.addWidget(self.loading_subtext)
+        
+        self.loading_overlay.hide()
 
     def set_image(self, pixmap: QPixmap, restore_state: dict = None):
         """Sets canvas image and resets viewport zoom."""
@@ -200,6 +355,58 @@ class InteractiveImageViewer(QGraphicsView):
         self.update_viewer_cursor()
         self._placeholder.show()
         self._placeholder.setGeometry(self.rect())
+        if hasattr(self, "loading_overlay") and self.loading_overlay:
+            self.loading_overlay.hide()
+
+    def set_canvas_background(self, color_hex: str):
+        self.setStyleSheet(f"background-color: {color_hex}; border: 1px solid #2B2B35; border-radius: 6px;")
+
+    def show_loading(self, text: str, gpu_active: bool = True):
+        self.loading_text.setText(text)
+        self.loading_subtext.setVisible(gpu_active)
+        self.loading_overlay.setGeometry(self.rect())
+        self.loading_overlay.show()
+        # Process events to force rendering overlay immediately
+        from PySide6.QtWidgets import QApplication
+        QApplication.processEvents()
+
+    def hide_loading(self):
+        self.loading_overlay.hide()
+
+    def zoom_in(self):
+        current_scale = self.transform().m11()
+        if self._initial_fit_scale is None:
+            self._initial_fit_scale = current_scale
+        factor = self._zoom_factor
+        new_scale = current_scale * factor
+        max_limit = self._initial_fit_scale * 20.0
+        if new_scale > max_limit:
+            new_scale = max_limit
+        relative_factor = new_scale / current_scale
+        self.scale(relative_factor, relative_factor)
+        self._zoom_touched = True
+        self.update_viewer_cursor()
+
+    def zoom_out(self):
+        current_scale = self.transform().m11()
+        if self._initial_fit_scale is None:
+            self._initial_fit_scale = current_scale
+        factor = 1.0 / self._zoom_factor
+        new_scale = current_scale * factor
+        min_limit = self._initial_fit_scale * 0.1
+        if new_scale < min_limit:
+            new_scale = min_limit
+        relative_factor = new_scale / current_scale
+        self.scale(relative_factor, relative_factor)
+        self._zoom_touched = True
+        self.update_viewer_cursor()
+
+    def fit_screen(self):
+        if not self.pixmap_item.pixmap().isNull():
+            self.resetTransform()
+            self.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
+            self._zoom_touched = False
+            self.update_viewer_cursor()
 
     def set_masks(self, masks_arr: np.ndarray):
         """Generates a high-contrast colored overlay from the 2D integer masks array."""
@@ -276,6 +483,8 @@ class InteractiveImageViewer(QGraphicsView):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._placeholder.setGeometry(self.rect())
+        if hasattr(self, "loading_overlay") and self.loading_overlay:
+            self.loading_overlay.setGeometry(self.rect())
         # Only fit to view automatically on resize if user has not yet interacted with zoom/pan
         if not self.pixmap_item.pixmap().isNull() and not self._zoom_touched:
             self.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
@@ -469,10 +678,11 @@ class AnalysisPage(QWidget):
         self._sync_theme()
 
     def _setup_ui(self):
+        # Spacing: LG = 24px outer margins
         self.page_layout = QVBoxLayout(self)
         self.page_layout.setObjectName("PageVerticalLayout")
-        self.page_layout.setContentsMargins(20, 20, 20, 20)
-        self.page_layout.setSpacing(12)
+        self.page_layout.setContentsMargins(UI_SPACING_LG, UI_SPACING_LG, UI_SPACING_LG, UI_SPACING_LG)
+        self.page_layout.setSpacing(UI_SPACING_SM)
 
         from lumen.ui.workspace_switcher import WorkspaceSwitcher
         self.workspace_switcher = WorkspaceSwitcher("single")
@@ -481,109 +691,134 @@ class AnalysisPage(QWidget):
         self.main_layout = QHBoxLayout()
         self.main_layout.setObjectName("PageContainer")
         self.main_layout.setContentsMargins(0, 0, 0, 0)
-        self.main_layout.setSpacing(16)
+        self.main_layout.setSpacing(UI_SPACING_MD)
 
-        # 1. Left Panel: Image Metadata List (Simplified and Concise)
+        # 1. Left Panel: Image Properties Card (resizable)
         self.left_panel = QFrame()
         self.left_panel.setObjectName("AnalysisLeftPanel")
-        self.left_panel.setFixedWidth(280)
-        self.left_panel.setStyleSheet("""
-            #AnalysisLeftPanel {
-                background-color: #1C1C22;
-                border: 1px solid #2B2B35;
+        self.left_panel.setMinimumWidth(220)
+        self.left_panel.setMaximumWidth(320)
+        self.left_panel.setStyleSheet(f"""
+            #AnalysisLeftPanel {{
+                background-color: {COLOR_CARD};
+                border: 1px solid {COLOR_BORDER};
                 border-radius: 8px;
-                padding: 16px;
-            }
+            }}
         """)
         left_layout = QVBoxLayout(self.left_panel)
-        left_layout.setContentsMargins(16, 16, 16, 16)
-        left_layout.setSpacing(16)
+        left_layout.setContentsMargins(UI_SPACING_MD, UI_SPACING_MD, UI_SPACING_MD, UI_SPACING_MD)
+        left_layout.setSpacing(UI_SPACING_MD)
 
-        # Panel Header
         left_title = QLabel("Image Properties")
         left_title.setStyleSheet("font-size: 15px; font-weight: bold; color: #FFFFFF;")
         left_layout.addWidget(left_title)
 
-        # Clear description placeholder shown when empty
+        # Empty State Placeholder
         self.meta_placeholder = QLabel("No active image metadata.\nImport an image to inspect details.")
-        self.meta_placeholder.setStyleSheet("color: #6B7280; font-size: 11px;")
+        self.meta_placeholder.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px;")
         self.meta_placeholder.setAlignment(Qt.AlignCenter)
         left_layout.addWidget(self.meta_placeholder, 1)
 
-        # Main Metadata Grid
-        self.meta_container = QFrame()
-        self.meta_grid = QGridLayout(self.meta_container)
-        self.meta_grid.setContentsMargins(0, 0, 0, 0)
-        self.meta_grid.setSpacing(12)
+        # Metadata Card Layout
+        self.meta_container = QWidget()
+        meta_layout = QVBoxLayout(self.meta_container)
+        meta_layout.setContentsMargins(0, 0, 0, 0)
+        meta_layout.setSpacing(UI_SPACING_SM)
 
-        # Metadata labels
-        fn_lbl = QLabel("Filename:")
-        fn_lbl.setStyleSheet("color: #6B7280; font-size: 10px; font-weight: bold; text-transform: uppercase;")
+        # Section 1: Image Details Info
+        image_sec = QFrame()
+        image_sec.setStyleSheet(f"border-bottom: 1px solid {COLOR_BORDER}; padding-bottom: {UI_SPACING_SM}px;")
+        image_sec_layout = QGridLayout(image_sec)
+        image_sec_layout.setContentsMargins(0, 0, 0, 0)
+        image_sec_layout.setSpacing(UI_SPACING_XS)
+
+        fn_lbl = QLabel("📄 Filename:")
+        fn_lbl.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px; font-weight: 500;")
         self.fn_val = QLabel("-")
         self.fn_val.setWordWrap(True)
         self.fn_val.setStyleSheet("color: #FFFFFF; font-size: 12px; font-weight: bold;")
 
-        res_lbl = QLabel("Resolution:")
-        res_lbl.setStyleSheet("color: #6B7280; font-size: 10px; font-weight: bold; text-transform: uppercase;")
+        res_lbl = QLabel("📐 Resolution:")
+        res_lbl.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px; font-weight: 500;")
         self.res_val = QLabel("-")
         self.res_val.setStyleSheet("color: #E5E7EB; font-size: 12px;")
 
-        ch_lbl = QLabel("Channels:")
-        ch_lbl.setStyleSheet("color: #6B7280; font-size: 10px; font-weight: bold; text-transform: uppercase;")
+        ch_lbl = QLabel("🧬 Channels:")
+        ch_lbl.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px; font-weight: 500;")
         self.ch_val = QLabel("-")
         self.ch_val.setStyleSheet("color: #E5E7EB; font-size: 12px;")
 
-        mode_lbl = QLabel("Image Mode:")
-        mode_lbl.setStyleSheet("color: #6B7280; font-size: 10px; font-weight: bold; text-transform: uppercase;")
+        mode_lbl = QLabel("🔬 Mode:")
+        mode_lbl.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px; font-weight: 500;")
         self.mode_val = QLabel("-")
         self.mode_val.setStyleSheet("color: #E5E7EB; font-size: 12px;")
 
-        type_lbl = QLabel("Detected Type:")
-        type_lbl.setStyleSheet("color: #6B7280; font-size: 10px; font-weight: bold; text-transform: uppercase;")
+        image_sec_layout.addWidget(fn_lbl, 0, 0)
+        image_sec_layout.addWidget(self.fn_val, 0, 1)
+        image_sec_layout.addWidget(res_lbl, 1, 0)
+        image_sec_layout.addWidget(self.res_val, 1, 1)
+        image_sec_layout.addWidget(ch_lbl, 2, 0)
+        image_sec_layout.addWidget(self.ch_val, 2, 1)
+        image_sec_layout.addWidget(mode_lbl, 3, 0)
+        image_sec_layout.addWidget(self.mode_val, 3, 1)
+        meta_layout.addWidget(image_sec)
+
+        # Section 2: Calibration Info
+        calib_sec = QFrame()
+        calib_sec.setStyleSheet(f"border-bottom: 1px solid {COLOR_BORDER}; padding-bottom: {UI_SPACING_SM}px;")
+        calib_sec_layout = QGridLayout(calib_sec)
+        calib_sec_layout.setContentsMargins(0, 0, 0, 0)
+        calib_sec_layout.setSpacing(UI_SPACING_XS)
+
+        voxel_lbl = QLabel("📏 Pixel Size:")
+        voxel_lbl.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px; font-weight: 500;")
+        self.voxel_val = QLabel("-")
+        self.voxel_val.setStyleSheet("color: #E5E7EB; font-size: 12px;")
+
+        type_lbl = QLabel("📍 Type:")
+        type_lbl.setStyleSheet(f"color: {COLOR_TEXT_SECONDARY}; font-size: 11px; font-weight: 500;")
         self.type_val = QLabel("-")
         self.type_val.setWordWrap(True)
-        self.type_val.setStyleSheet("color: #6366F1; font-size: 12px; font-weight: 600;")
+        self.type_val.setStyleSheet("color: #6366F1; font-size: 12px; font-weight: bold;")
 
-        self.meta_grid.addWidget(fn_lbl, 0, 0)
-        self.meta_grid.addWidget(self.fn_val, 0, 1)
-        self.meta_grid.addWidget(res_lbl, 1, 0)
-        self.meta_grid.addWidget(self.res_val, 1, 1)
-        self.meta_grid.addWidget(ch_lbl, 2, 0)
-        self.meta_grid.addWidget(self.ch_val, 2, 1)
-        self.meta_grid.addWidget(mode_lbl, 3, 0)
-        self.meta_grid.addWidget(self.mode_val, 3, 1)
-        self.meta_grid.addWidget(type_lbl, 4, 0)
-        self.meta_grid.addWidget(self.type_val, 4, 1)
+        calib_sec_layout.addWidget(voxel_lbl, 0, 0)
+        calib_sec_layout.addWidget(self.voxel_val, 0, 1)
+        calib_sec_layout.addWidget(type_lbl, 1, 0)
+        calib_sec_layout.addWidget(self.type_val, 1, 1)
+        meta_layout.addWidget(calib_sec)
 
         left_layout.addWidget(self.meta_container, 1)
         self.meta_container.setVisible(False)
 
-        self.main_layout.addWidget(self.left_panel)
-
-        # 2. Center Panel: Image Visualization View
+        # 2. Center Panel: Image Viewer with controls underneath
         self.center_container = QFrame()
         center_layout = QVBoxLayout(self.center_container)
         center_layout.setContentsMargins(0, 0, 0, 0)
-        center_layout.setSpacing(12)
+        center_layout.setSpacing(UI_SPACING_SM)
 
         self.image_viewer = InteractiveImageViewer(self)
         center_layout.addWidget(self.image_viewer, 1)
 
-        # 2A. Controls Bar underneath the image viewer
+        # Viewer Controls Bar underneath the canvas
         self.viewer_controls_bar = QFrame()
         self.viewer_controls_bar.setObjectName("ViewerControlsBar")
-        self.viewer_controls_bar.setStyleSheet("""
-            #ViewerControlsBar {
-                background-color: #1C1C22;
-                border: 1px solid #2B2B35;
-                border-radius: 6px;
-                padding: 6px 12px;
-            }
+        self.viewer_controls_bar.setStyleSheet(f"""
+            #ViewerControlsBar {{
+                background-color: {COLOR_CARD};
+                border: 1px solid {COLOR_BORDER};
+                border-radius: 8px;
+                padding: {UI_SPACING_SM}px;
+            }}
         """)
-        controls_layout = QHBoxLayout(self.viewer_controls_bar)
-        controls_layout.setContentsMargins(0, 0, 0, 0)
-        controls_layout.setSpacing(16)
-        
+        controls_bar_layout = QVBoxLayout(self.viewer_controls_bar)
+        controls_bar_layout.setContentsMargins(UI_SPACING_SM, UI_SPACING_SM, UI_SPACING_SM, UI_SPACING_SM)
+        controls_bar_layout.setSpacing(UI_SPACING_XS)
+
+        # Row 1: Visibility Layers & Opacity Slider
+        row1_layout = QHBoxLayout()
+        row1_layout.setContentsMargins(0, 0, 0, 0)
+        row1_layout.setSpacing(UI_SPACING_MD)
+
         self.show_original_chk = QCheckBox("Show Original Image")
         self.show_original_chk.setChecked(True)
         self.show_original_chk.setCursor(Qt.PointingHandCursor)
@@ -593,21 +828,11 @@ class AnalysisPage(QWidget):
         self.show_overlay_chk.setChecked(True)
         self.show_overlay_chk.setCursor(Qt.PointingHandCursor)
         self.show_overlay_chk.setStyleSheet("font-size: 11px; color: #E5E7EB;")
+
+        opacity_lbl = QLabel("Mask Opacity:")
+        opacity_lbl.setStyleSheet(f"font-size: 11px; color: {COLOR_TEXT_SECONDARY};")
         
-        controls_layout.addWidget(self.show_original_chk)
-        controls_layout.addWidget(self.show_overlay_chk)
-        
-        sep_lbl = QLabel("|")
-        sep_lbl.setStyleSheet("color: #2B2B35;")
-        controls_layout.addWidget(sep_lbl)
-        
-        slider_layout = QHBoxLayout()
-        slider_layout.setSpacing(6)
-        
-        slider_label = QLabel("Mask Opacity:")
-        slider_label.setStyleSheet("font-size: 11px; color: #9CA3AF;")
-        
-        self.opacity_slider = QSlider(Qt.Horizontal)
+        self.opacity_slider = FocusWheelSlider(Qt.Horizontal)
         self.opacity_slider.setRange(0, 100)
         self.opacity_slider.setValue(40)
         self.opacity_slider.setFixedWidth(100)
@@ -615,46 +840,91 @@ class AnalysisPage(QWidget):
         
         self.opacity_val_lbl = QLabel("40%")
         self.opacity_val_lbl.setStyleSheet("font-size: 11px; color: #E5E7EB; min-width: 30px;")
+
+        row1_layout.addWidget(self.show_original_chk)
+        row1_layout.addWidget(self.show_overlay_chk)
+        row1_layout.addWidget(opacity_lbl)
+        row1_layout.addWidget(self.opacity_slider)
+        row1_layout.addWidget(self.opacity_val_lbl)
+        row1_layout.addStretch(1)
+        controls_bar_layout.addLayout(row1_layout)
+
+        # Row 2: Channel Display dropdown, Zoom control buttons, Auto contrast
+        row2_layout = QHBoxLayout()
+        row2_layout.setContentsMargins(0, 0, 0, 0)
+        row2_layout.setSpacing(UI_SPACING_MD)
+
+        ch_disp_lbl = QLabel("Channel Display:")
+        ch_disp_lbl.setStyleSheet(f"font-size: 11px; color: {COLOR_TEXT_SECONDARY}; font-weight: bold;")
+        self.viewer_combo = FocusWheelComboBox()
+        self.viewer_combo.setCursor(Qt.PointingHandCursor)
+        self.viewer_combo.setFixedWidth(160)
+        self.viewer_combo.addItem("Channel 0: Grayscale", 0)
+
+        # Zoom buttons
+        zoom_layout = QHBoxLayout()
+        zoom_layout.setSpacing(4)
         
-        slider_layout.addWidget(slider_label)
-        slider_layout.addWidget(self.opacity_slider)
-        slider_layout.addWidget(self.opacity_val_lbl)
-        controls_layout.addLayout(slider_layout)
+        self.zoom_in_btn = QPushButton("+")
+        self.zoom_in_btn.setToolTip("Zoom In")
+        self.zoom_in_btn.setFixedSize(24, 24)
+        self.zoom_in_btn.setCursor(Qt.PointingHandCursor)
+        self.zoom_in_btn.setStyleSheet("font-weight: bold; font-size: 12px; padding: 0;")
         
-        controls_layout.addStretch(1)
-        
-        # Auto Contrast status text inside controls layout
+        self.zoom_out_btn = QPushButton("-")
+        self.zoom_out_btn.setToolTip("Zoom Out")
+        self.zoom_out_btn.setFixedSize(24, 24)
+        self.zoom_out_btn.setCursor(Qt.PointingHandCursor)
+        self.zoom_out_btn.setStyleSheet("font-weight: bold; font-size: 12px; padding: 0;")
+
+        self.zoom_fit_btn = QPushButton("⛶")
+        self.zoom_fit_btn.setToolTip("Fit Screen")
+        self.zoom_fit_btn.setFixedSize(24, 24)
+        self.zoom_fit_btn.setCursor(Qt.PointingHandCursor)
+        self.zoom_fit_btn.setStyleSheet("font-size: 12px; padding: 0;")
+
+        self.maximize_btn = QPushButton("🗖")
+        self.maximize_btn.setToolTip("Toggle Maximize Viewer")
+        self.maximize_btn.setFixedSize(24, 24)
+        self.maximize_btn.setCheckable(True)
+        self.maximize_btn.setCursor(Qt.PointingHandCursor)
+        self.maximize_btn.setStyleSheet("font-size: 12px; padding: 0;")
+
+        zoom_layout.addWidget(self.zoom_in_btn)
+        zoom_layout.addWidget(self.zoom_out_btn)
+        zoom_layout.addWidget(self.zoom_fit_btn)
+        zoom_layout.addWidget(self.maximize_btn)
+
         self.viewer_contrast_lbl = QLabel("✨ Auto Contrast Applied")
         self.viewer_contrast_lbl.setStyleSheet("font-size: 10px; color: #818CF8; font-weight: bold;")
         self.viewer_contrast_lbl.setVisible(False)
-        controls_layout.addWidget(self.viewer_contrast_lbl)
-        
+
+        row2_layout.addWidget(ch_disp_lbl)
+        row2_layout.addWidget(self.viewer_combo)
+        row2_layout.addLayout(zoom_layout)
+        row2_layout.addStretch(1)
+        row2_layout.addWidget(self.viewer_contrast_lbl)
+        controls_bar_layout.addLayout(row2_layout)
+
         center_layout.addWidget(self.viewer_controls_bar)
 
-        # Viewer container is added to self.right_splitter at the end of setup_ui
-
-        # 3. Right Panel: Workflow outlines / action controls
+        # 3. Right Sidebar Panel: Parameters & Actions
         self.right_panel = QFrame()
         self.right_panel.setObjectName("AnalysisRightPanel")
-        self.right_panel.setMinimumWidth(300)
-        self.right_panel.setMaximumWidth(350)
-        self.right_panel.setStyleSheet("""
-            #AnalysisRightPanel {
-                background-color: #1C1C22;
-                border: 1px solid #2B2B35;
+        self.right_panel.setMinimumWidth(340)
+        self.right_panel.setMaximumWidth(450)
+        self.right_panel.setStyleSheet(f"""
+            #AnalysisRightPanel {{
+                background-color: {COLOR_CARD};
+                border: 1px solid {COLOR_BORDER};
                 border-radius: 8px;
-                padding: 16px;
-            }
+            }}
         """)
         right_layout = QVBoxLayout(self.right_panel)
-        right_layout.setContentsMargins(12, 12, 12, 12)
+        right_layout.setContentsMargins(16, 16, 16, 16)
         right_layout.setSpacing(12)
 
-        right_title = QLabel("Selected Pipeline")
-        right_title.setStyleSheet("font-size: 15px; font-weight: bold; color: #FFFFFF;")
-        right_layout.addWidget(right_title)
-
-        # Scroll area for parameter settings and guidance profile to prevent UI clipping
+        # Scroll Area for parameters
         self.right_scroll = QScrollArea()
         self.right_scroll.setWidgetResizable(True)
         self.right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -665,150 +935,123 @@ class AnalysisPage(QWidget):
         scroll_widget.setObjectName("RightScrollWidget")
         scroll_widget.setStyleSheet("background: transparent;")
         scroll_layout = QVBoxLayout(scroll_widget)
-        scroll_layout.setContentsMargins(0, 0, 0, 0)
-        scroll_layout.setSpacing(14)
+        scroll_layout.setContentsMargins(0, 0, 16, 0)
+        scroll_layout.setSpacing(20)
 
-        # Active workflow label & combobox
+        # Active Workflow (Always visible)
+        wf_card = AnalysisParameterCard("Active Workflow")
         self.wf_lbl = QLabel("Active Workflow:")
         self.wf_lbl.setObjectName("WorkflowLabel")
         self.wf_lbl.setStyleSheet("font-weight: bold; font-size: 10px; color: #6366F1; text-transform: uppercase;")
-        scroll_layout.addWidget(self.wf_lbl)
-
-        self.wf_combo = QComboBox()
+        self.wf_combo = FocusWheelComboBox()
         self.wf_combo.setObjectName("WorkflowComboBox")
         self.wf_combo.addItem("Cell Segmentation", "cell_counting")
         self.wf_combo.addItem("Fluorescence Analysis", "fluorescence")
         self.wf_combo.setCursor(QCursor(Qt.PointingHandCursor))
-        scroll_layout.addWidget(self.wf_combo)
+        wf_card.layout.addWidget(self.wf_lbl)
+        wf_card.layout.addWidget(self.wf_combo)
+        scroll_layout.addWidget(wf_card)
 
-        # Warning banner frame
-        self.banner_frame = QFrame()
-        self.banner_frame.setObjectName("WorkflowBannerFrame")
-        self.banner_frame.setStyleSheet("""
-            #WorkflowBannerFrame {
-                background-color: #3730A3;
-                border: 1px solid #4338CA;
-                border-radius: 4px;
-                padding: 8px;
-            }
-        """)
-        banner_layout = QVBoxLayout(self.banner_frame)
-        banner_layout.setContentsMargins(6, 6, 6, 6)
-        banner_layout.setSpacing(6)
-        self.banner_lbl = QLabel("Fluorescence workflow coming soon — using segmentation workspace.")
-        self.banner_lbl.setStyleSheet("color: #E0E7FF; font-size: 11px; font-weight: 500;")
-        self.banner_lbl.setWordWrap(True)
-        banner_layout.addWidget(self.banner_lbl)
-
-        from lumen.ui.fluorescence_panel import FluorescencePanel
-        self.fluorescence_panel = FluorescencePanel(self.banner_frame)
-        banner_layout.addWidget(self.fluorescence_panel)
-        self.fluorescence_panel.hide()
-
-        scroll_layout.addWidget(self.banner_frame)
-        self.banner_frame.setVisible(False)
-
-
-        # Steps log (not stretching, set to factor 0)
-        self.steps_container = QFrame()
-        self.steps_layout = QVBoxLayout(self.steps_container)
-        self.steps_layout.setContentsMargins(4, 4, 4, 4)
-        self.steps_layout.setSpacing(10)
-        self.steps_layout.setAlignment(Qt.AlignTop)
-        scroll_layout.addWidget(self.steps_container, 0)
-
-        # Segmentation Parameter panel
-        self.segmentation_panel = QFrame()
-        self.segmentation_panel.setObjectName("SegmentationPanel")
-        self.segmentation_panel.setStyleSheet("background: transparent; border: none;")
-        seg_layout = QVBoxLayout(self.segmentation_panel)
-        seg_layout.setContentsMargins(0, 0, 0, 0)
-        seg_layout.setSpacing(10)
-
-        # Method Selector
-        self.method_lbl = QLabel("Segmentation Method:")
-        self.method_lbl.setObjectName("MethodLabel")
-        self.method_lbl.setStyleSheet("font-size: 10px; font-weight: bold; color: #6B7280; text-transform: uppercase;")
+        # Segmentation Parameter Card (Always visible)
+        self.segmentation_card = AnalysisParameterCard("Segmentation Settings")
         
-        self.method_combo = QComboBox()
-        self.method_combo.setObjectName("MethodComboBox")
+        self.method_lbl = QLabel("Segmentation Method:")
+        self.method_lbl.setStyleSheet("font-size: 10px; font-weight: bold; color: #6B7280; text-transform: uppercase;")
+        self.method_combo = FocusWheelComboBox()
         self.method_combo.addItems(["AI Segmentation (Cellpose)"])
         self.method_combo.setCurrentText("AI Segmentation (Cellpose)")
-        self.method_combo.setCursor(QCursor(Qt.PointingHandCursor))
         
-        seg_layout.addWidget(self.method_lbl)
-        seg_layout.addWidget(self.method_combo)
-
-        # Model Selector
         self.model_lbl = QLabel("Segmentation Model:")
-        self.model_lbl.setObjectName("ModelLabel")
         self.model_lbl.setStyleSheet("font-size: 10px; font-weight: bold; color: #6B7280; text-transform: uppercase;")
-        
-        self.model_combo = QComboBox()
-        self.model_combo.setObjectName("ModelComboBox")
+        self.model_combo = FocusWheelComboBox()
         self.model_combo.addItems(["Auto", "Cyto3", "Nuclei"])
         self.model_combo.setCurrentText(state.segmentation_model)
-        self.model_combo.setCursor(QCursor(Qt.PointingHandCursor))
-        
-        seg_layout.addWidget(self.model_lbl)
-        seg_layout.addWidget(self.model_combo)
-
-        # Quality Selector layout (AI params)
-        self.quality_frame = QFrame()
-        self.quality_frame.setObjectName("QualitySelectorFrame")
-        self.quality_frame.setStyleSheet("background: transparent; border: none; margin-bottom: 4px;")
-        quality_layout = QVBoxLayout(self.quality_frame)
-        quality_layout.setContentsMargins(0, 0, 0, 0)
-        quality_layout.setSpacing(4)
         
         self.quality_lbl = QLabel("Segmentation Quality:")
-        self.quality_lbl.setObjectName("QualityLabel")
         self.quality_lbl.setStyleSheet("font-size: 10px; font-weight: bold; color: #6B7280; text-transform: uppercase;")
-        
-        self.quality_combo = QComboBox()
-        self.quality_combo.setObjectName("QualityComboBox")
+        self.quality_combo = FocusWheelComboBox()
         self.quality_combo.addItems(["Fast", "Balanced", "Sensitive", "Precise"])
         self.quality_combo.setCurrentText("Balanced")
-        self.quality_combo.setCursor(QCursor(Qt.PointingHandCursor))
+
+        self.channel_frame = QWidget()
+        channel_lay = QVBoxLayout(self.channel_frame)
+        channel_lay.setContentsMargins(0, 0, 0, 0)
+        channel_lay.setSpacing(4)
+        self.channel_lbl = QLabel("Segmentation Channel:")
+        self.channel_lbl.setStyleSheet("font-size: 10px; font-weight: bold; color: #6B7280; text-transform: uppercase;")
+        self.channel_combo = FocusWheelComboBox()
+        channel_lay.addWidget(self.channel_lbl)
+        channel_lay.addWidget(self.channel_combo)
         
-        quality_layout.addWidget(self.quality_lbl)
-        quality_layout.addWidget(self.quality_combo)
-        seg_layout.addWidget(self.quality_frame)
-        
-        scroll_layout.addWidget(self.segmentation_panel)
-        
-        # Preprocessing Panel card container
-        self.preprocess_container = QFrame()
-        self.preprocess_container.setObjectName("PreprocessingContainer")
-        self.preprocess_container.setStyleSheet("""
-            #PreprocessingContainer {
-                background-color: #17171C;
-                border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 8px;
-                padding: 12px;
-            }
-        """)
+        self.segmentation_card.layout.addWidget(self.method_lbl)
+        self.segmentation_card.layout.addWidget(self.method_combo)
+        self.segmentation_card.layout.addWidget(self.model_lbl)
+        self.segmentation_card.layout.addWidget(self.model_combo)
+        self.segmentation_card.layout.addWidget(self.quality_lbl)
+        self.segmentation_card.layout.addWidget(self.quality_combo)
+        self.segmentation_card.layout.addWidget(self.channel_frame)
+        self.channel_frame.hide() # Shown dynamically
+        scroll_layout.addWidget(self.segmentation_card)
+
+        # Calibration Settings (Always visible)
+        self.calib_card = AnalysisParameterCard("Calibration Settings")
+        calib_lbl = QLabel("Calibration Mode:")
+        calib_lbl.setStyleSheet("font-size: 10px; font-weight: bold; color: #6B7280; text-transform: uppercase;")
+        self.calib_combo = FocusWheelComboBox()
+        self.calib_combo.addItem("Pixel Mode (px)", "pixel")
+        self.calib_combo.addItem("Micron Mode (µm)", "micron")
+        self.calib_card.layout.addWidget(calib_lbl)
+        self.calib_card.layout.addWidget(self.calib_combo)
+        scroll_layout.addWidget(self.calib_card)
+
+        # Collapsible Section 1: Preprocessing controls
+        self.prep_section = CollapsibleSection("Image Preprocessing")
+        self.preprocess_container = QWidget()
         preprocess_card_layout = QVBoxLayout(self.preprocess_container)
-        preprocess_card_layout.setContentsMargins(6, 6, 6, 6)
+        preprocess_card_layout.setContentsMargins(0, 0, 0, 0)
         
         from lumen.ui.preprocessing_panel import PreprocessingPanel
         self.preprocess_panel = PreprocessingPanel(self.preprocess_container)
         preprocess_card_layout.addWidget(self.preprocess_panel)
-        
-        scroll_layout.addWidget(self.preprocess_container)
-        
-        scroll_layout.addStretch(1)
+        self.prep_section.set_content(self.preprocess_container)
+        scroll_layout.addWidget(self.prep_section)
 
+        # Collapsible Section 2: Fluorescence Settings
+        self.naming_section = CollapsibleSection("Fluorescence Settings")
+        self.channel_controls_container = QWidget()
+        channel_controls_layout = QVBoxLayout(self.channel_controls_container)
+        channel_controls_layout.setContentsMargins(0, 0, 0, 0)
+        
+        from lumen.ui.fluorescence_panel import FluorescencePanel
+        self.fluorescence_panel = FluorescencePanel(self.channel_controls_container)
+        channel_controls_layout.addWidget(self.fluorescence_panel)
+        self.naming_section.set_content(self.channel_controls_container)
+        scroll_layout.addWidget(self.naming_section)
+        self.naming_section.hide() # Shown dynamically if channels > 1
+
+        # Collapsible Section 3: Puncta Settings Placeholder
+        self.puncta_section = CollapsibleSection("Puncta Settings")
+        puncta_card = QWidget()
+        puncta_lay = QVBoxLayout(puncta_card)
+        puncta_lay.setContentsMargins(0, 0, 0, 0)
+        puncta_placeholder_lbl = QLabel("Puncta analysis configuration will be available in upcoming phase.")
+        puncta_placeholder_lbl.setStyleSheet(f"font-size: 11px; color: {COLOR_TEXT_SECONDARY};")
+        puncta_lay.addWidget(puncta_placeholder_lbl)
+        self.puncta_section.set_content(puncta_card)
+        scroll_layout.addWidget(self.puncta_section)
+        self.puncta_section.hide() # Shown dynamically if puncta workflow selected
+
+        scroll_layout.addStretch(1)
         self.right_scroll.setWidget(scroll_widget)
         right_layout.addWidget(self.right_scroll, 1)
 
-        # Bottom section: Fixed separator line and analysis execution controls
+        # Bottom section: Pinned action controls
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("background-color: #2B2B35; max-height: 1px; margin: 4px 0;")
+        sep.setStyleSheet(f"background-color: {COLOR_BORDER}; max-height: 1px; margin: 4px 0;")
         right_layout.addWidget(sep)
 
-        # Progress and Status indicators (hidden by default)
+        # Progress and status labels
         self.status_lbl = QLabel("")
         self.status_lbl.setObjectName("AnalysisStatusLabel")
         self.status_lbl.setVisible(False)
@@ -823,24 +1066,42 @@ class AnalysisPage(QWidget):
         self.progress_bar.setVisible(False)
         right_layout.addWidget(self.progress_bar)
 
-        # Action Buttons
+        # Action Buttons Layout (Pinned bottom action dock)
+        self.run_btn = QPushButton("Run Analysis")
+        self.run_btn.setObjectName("RunAnalysisButton")
+        self.run_btn.setProperty("class", "PrimaryButton")
+        self.run_btn.setFixedHeight(50) # Prominent anchoring height
+        self.run_btn.setCursor(QCursor(Qt.ArrowCursor))
+        self.run_btn.setEnabled(False)
+        right_layout.addWidget(self.run_btn)
+
+        button_sep = QFrame()
+        button_sep.setFrameShape(QFrame.HLine)
+        button_sep.setStyleSheet(f"background-color: {COLOR_BORDER}; max-height: 1px; margin: 2px 0;")
+        right_layout.addWidget(button_sep)
+
         self.edit_btn = QPushButton("✏ Edit Masks")
         self.edit_btn.setObjectName("EditMasksButton")
         self.edit_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.edit_btn.setEnabled(False)
         right_layout.addWidget(self.edit_btn)
 
+        secondary_btns_layout = QHBoxLayout()
+        secondary_btns_layout.setSpacing(UI_SPACING_XS)
+        
         self.save_analysis_btn = QPushButton("💾 Save Analysis")
         self.save_analysis_btn.setObjectName("SaveAnalysisButton")
         self.save_analysis_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.save_analysis_btn.setEnabled(False)
-        right_layout.addWidget(self.save_analysis_btn)
-
+        
         self.reset_changes_btn = QPushButton("🔄 Reset Changes")
         self.reset_changes_btn.setObjectName("ResetChangesButton")
         self.reset_changes_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.reset_changes_btn.setEnabled(False)
-        right_layout.addWidget(self.reset_changes_btn)
+
+        secondary_btns_layout.addWidget(self.save_analysis_btn)
+        secondary_btns_layout.addWidget(self.reset_changes_btn)
+        right_layout.addLayout(secondary_btns_layout)
 
         self.dirty_lbl = QLabel("")
         self.dirty_lbl.setObjectName("DirtyStatusLabel")
@@ -849,27 +1110,62 @@ class AnalysisPage(QWidget):
         self.dirty_lbl.setStyleSheet("color: #ff9800; font-weight: bold; margin: 4px;")
         right_layout.addWidget(self.dirty_lbl)
 
-        self.run_btn = QPushButton("Run Analysis")
-        self.run_btn.setObjectName("RunAnalysisButton")
-        self.run_btn.setProperty("class", "PrimaryButton")
-        self.run_btn.setCursor(QCursor(Qt.ArrowCursor))
-        self.run_btn.setEnabled(False)
-        right_layout.addWidget(self.run_btn)
-
-        # Create a horizontal QSplitter to allow dragging and resizing of the right pane
-        from PySide6.QtWidgets import QSplitter
-        self.right_splitter = QSplitter(Qt.Horizontal)
-        self.right_splitter.setObjectName("AnalysisRightSplitter")
-        self.right_splitter.addWidget(self.center_container)
-        self.right_splitter.addWidget(self.right_panel)
-        self.right_splitter.setStretchFactor(0, 1)
-        self.right_splitter.setStretchFactor(1, 0)
-        self.right_splitter.setCollapsible(0, False)
-        self.right_splitter.setCollapsible(1, False)
-        self.right_splitter.setSizes([750, 300])
+        # 4. Main Resizable QSplitter Configuration
+        self.main_splitter = QSplitter(Qt.Horizontal)
+        self.main_splitter.setObjectName("AnalysisMainSplitter")
+        self.main_splitter.addWidget(self.left_panel)
+        self.main_splitter.addWidget(self.center_container)
+        self.main_splitter.addWidget(self.right_panel)
         
-        self.main_layout.addWidget(self.right_splitter, 1)
+        self.main_splitter.setStretchFactor(0, 0)
+        self.main_splitter.setStretchFactor(1, 1)
+        self.main_splitter.setStretchFactor(2, 0)
+        
+        self.main_splitter.setCollapsible(0, True) # Allow collapsing left
+        self.main_splitter.setCollapsible(1, False) # Do not collapse viewer
+        self.main_splitter.setCollapsible(2, True) # Allow collapsing right
+
+        self.main_layout.addWidget(self.main_splitter, 1)
         self.page_layout.addLayout(self.main_layout, 1)
+
+        # 5. Permanent Window Footer Status Bar
+        self.footer_bar = QFrame()
+        self.footer_bar.setObjectName("AnalysisFooterBar")
+        self.footer_bar.setStyleSheet(f"""
+            #AnalysisFooterBar {{
+                background-color: #0E0E12;
+                border-top: 1px solid {COLOR_BORDER};
+                padding: 4px 12px;
+            }}
+        """)
+        footer_layout = QHBoxLayout(self.footer_bar)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.setSpacing(16)
+        
+        self.footer_status = QLabel("Ready")
+        self.footer_status.setStyleSheet(f"font-size: 11px; color: {COLOR_TEXT_SECONDARY};")
+        
+        self.footer_gpu = QLabel("GPU: Active (CUDA)")
+        self.footer_gpu.setStyleSheet(f"font-size: 11px; color: {COLOR_TEXT_SECONDARY};")
+
+        self.footer_res = QLabel("-")
+        self.footer_res.setStyleSheet(f"font-size: 11px; color: {COLOR_TEXT_SECONDARY};")
+        
+        self.footer_zoom = QLabel("Zoom: 100%")
+        self.footer_zoom.setStyleSheet(f"font-size: 11px; color: {COLOR_TEXT_SECONDARY};")
+
+        footer_layout.addWidget(self.footer_status)
+        footer_layout.addStretch(1)
+        footer_layout.addWidget(self.footer_gpu)
+        footer_layout.addWidget(self.footer_res)
+        footer_layout.addWidget(self.footer_zoom)
+        self.page_layout.addWidget(self.footer_bar)
+
+        # Restore Splitter/Workflow layouts from QSettings
+        self._restore_layout_state()
+        
+        # Connect splitter move triggers
+        self.main_splitter.splitterMoved.connect(self._save_layout_state)
 
     def _init_connections(self):
         # Trigger actual Cellpose analysis on click
@@ -885,10 +1181,21 @@ class AnalysisPage(QWidget):
         self.opacity_slider.valueChanged.connect(self._on_opacity_slider_changed)
         self.quality_combo.currentTextChanged.connect(self._on_quality_combo_changed)
 
+        # Zoom & maximize connections
+        self.zoom_in_btn.clicked.connect(self.image_viewer.zoom_in)
+        self.zoom_out_btn.clicked.connect(self.image_viewer.zoom_out)
+        self.zoom_fit_btn.clicked.connect(self.image_viewer.fit_screen)
+        self.maximize_btn.toggled.connect(self._toggle_viewer_maximize)
+
+        # Viewer Display & Calibration connections
+        self.viewer_combo.currentIndexChanged.connect(self._on_viewer_channel_changed)
+        self.calib_combo.currentIndexChanged.connect(self._on_calib_mode_changed)
+
         # Segmentation controls connections
         self.method_combo.currentTextChanged.connect(self._on_method_combo_changed)
         self.wf_combo.currentIndexChanged.connect(self._on_workflow_combo_changed)
         self.model_combo.currentTextChanged.connect(self._on_model_combo_changed)
+        self.channel_combo.currentIndexChanged.connect(self._on_channel_combo_changed)
         state.segmentation_model_changed.connect(self._on_state_segmentation_model_changed)
         
         # Handle state triggers
@@ -896,6 +1203,7 @@ class AnalysisPage(QWidget):
         state.workflow_selected.connect(self._on_workflow_selected)
         state.theme_changed.connect(self._sync_theme)
         state.page_changed.connect(self._on_page_changed)
+        state.channel_names_changed.connect(self._sync_viewer_channel_combo)
         
         # Connect Phase 2D transient state change listener slots
         state.show_original_changed.connect(self._on_state_show_original_changed)
@@ -903,8 +1211,12 @@ class AnalysisPage(QWidget):
         state.mask_opacity_changed.connect(self._on_state_mask_opacity_changed)
         state.quality_mode_changed.connect(self._on_state_quality_mode_changed)
 
+        # Connect Calibration mode state changes
+        state.calibration_mode_changed.connect(self._on_state_calibration_mode_changed)
+
         # Connect Segmentation state change listener slots
         state.segmentation_method_changed.connect(self._on_state_segmentation_method_changed)
+        state.segmentation_channel_changed.connect(self._on_state_segmentation_channel_changed)
         
         # Invalidate loaded image cache on analysis results changes
         state.analysis_completed.connect(self._invalidate_analysis_cache)
@@ -912,10 +1224,129 @@ class AnalysisPage(QWidget):
         
         # Handle dirty state transitions
         state.dirty_state_changed.connect(self._on_dirty_state_changed)
+        state.calibration_mode_changed.connect(self._on_calibration_mode_changed)
         self.save_analysis_btn.clicked.connect(self._on_save_clicked)
         
         # Initial boot check
         self._sync_state()
+
+    def _save_layout_state(self, pos=0, index=0):
+        settings = QSettings("Lumen", "AnalysisPage")
+        settings.setValue("main_splitter_sizes", self.main_splitter.sizes())
+        settings.setValue("left_collapsed", self.main_splitter.sizes()[0] == 0)
+        settings.setValue("right_collapsed", self.main_splitter.sizes()[2] == 0)
+        settings.setValue("viewer_maximized", self.maximize_btn.isChecked())
+        settings.setValue("last_selected_workflow", self.wf_combo.currentData())
+
+    def _restore_layout_state(self):
+        settings = QSettings("Lumen", "AnalysisPage")
+        
+        # Splitter sizes
+        sizes = settings.value("main_splitter_sizes")
+        if sizes:
+            try:
+                int_sizes = [int(s) for s in sizes]
+                self.main_splitter.setSizes(int_sizes)
+            except Exception as e:
+                logger.error("Error restoring main_splitter_sizes: %s", e)
+                self.main_splitter.setSizes([260, 680, 340])
+        else:
+            self.main_splitter.setSizes([260, 680, 340])
+
+        # Collapsed states
+        left_collapsed = settings.value("left_collapsed", type=bool)
+        right_collapsed = settings.value("right_collapsed", type=bool)
+        # Apply collapsed states
+        sizes = self.main_splitter.sizes()
+        if left_collapsed and len(sizes) > 0:
+            sizes[0] = 0
+        if right_collapsed and len(sizes) > 2:
+            sizes[2] = 0
+        self.main_splitter.setSizes(sizes)
+
+        # Maximize viewer state
+        viewer_maximized = settings.value("viewer_maximized", type=bool)
+        if viewer_maximized:
+            self.maximize_btn.setChecked(True)
+            self._toggle_viewer_maximize(True)
+
+        # Workflow
+        last_wf = settings.value("last_selected_workflow")
+        if last_wf:
+            idx = self.wf_combo.findData(last_wf)
+            if idx >= 0:
+                self.wf_combo.setCurrentIndex(idx)
+
+    @Slot(bool)
+    def _toggle_viewer_maximize(self, checked: bool):
+        if checked:
+            # Save pre-maximized sizes
+            self._pre_maximized_sizes = self.main_splitter.sizes()
+            # Set left and right sizes to 0
+            self.main_splitter.setSizes([0, self.width(), 0])
+        else:
+            if hasattr(self, "_pre_maximized_sizes"):
+                self.main_splitter.setSizes(self._pre_maximized_sizes)
+            else:
+                self.main_splitter.setSizes([260, 680, 340])
+        self._save_layout_state()
+
+    @Slot(int)
+    def _on_viewer_channel_changed(self, combo_idx: int):
+        val = self.viewer_combo.currentData()
+        if val is not None:
+            logger.info("AnalysisPage: Switching visible display channel selection to index %s", val)
+            state.active_viewer_channel = val
+            image_manager.set_active_channel(val)
+            
+            # Broadcast image reload to repaint GraphicsView
+            state.image_loaded.emit(state.current_image_path)
+
+    @Slot(int)
+    def _on_calib_mode_changed(self, combo_idx: int):
+        val = self.calib_combo.currentData()
+        if val is not None:
+            logger.info("AnalysisPage: Switching calibration mode selection to %s", val)
+            state.calibration_mode = val
+
+    @Slot(str)
+    def _on_state_calibration_mode_changed(self, mode: str):
+        self.calib_combo.blockSignals(True)
+        calib_idx = self.calib_combo.findData(mode)
+        if calib_idx >= 0:
+            self.calib_combo.setCurrentIndex(calib_idx)
+        self.calib_combo.blockSignals(False)
+
+    def _sync_viewer_channel_combo(self):
+        meta = image_manager.get_metadata()
+        if not meta:
+            return
+        channels_count = meta.get("channels", 1)
+        
+        self.viewer_combo.blockSignals(True)
+        self.viewer_combo.clear()
+        
+        names = state.channel_names
+        if not names or len(names) != channels_count:
+            from lumen.core.fluorescence.channels import get_default_channel_names
+            names = get_default_channel_names(channels_count, meta.get("filename", ""))
+            state.channel_names = names
+            
+        if channels_count > 1:
+            self.viewer_combo.addItem("Composite (All Merged)", -1)
+            for idx, name in enumerate(names):
+                self.viewer_combo.addItem(f"Channel {idx}: {name}", idx)
+        else:
+            self.viewer_combo.addItem("Channel 0: Grayscale", 0)
+            
+        viewer_idx = self.viewer_combo.findData(state.active_viewer_channel)
+        if viewer_idx >= 0:
+            self.viewer_combo.setCurrentIndex(viewer_idx)
+        else:
+            self.viewer_combo.setCurrentIndex(0)
+            
+        self.viewer_combo.blockSignals(False)
+        self._sync_channel_selector()
 
     def clear_selection(self):
         """Resets highlight overlay in image viewer and clears active tooltip."""
@@ -1004,6 +1435,7 @@ class AnalysisPage(QWidget):
             state.segmentation_method = session.segmentation_method
             state.current_workflow = session.current_workflow
             state.analysis_results = session.analysis_results
+            state.calibration_mode = getattr(session, "calibration_mode", "pixel")
             
             self._restore_from_session(session)
         else:
@@ -1026,6 +1458,38 @@ class AnalysisPage(QWidget):
             self._on_state_mask_opacity_changed(state.mask_opacity)
             self._on_state_quality_mode_changed(state.quality_mode)
             self._on_state_segmentation_method_changed(state.segmentation_method)
+            self._sync_channel_selector()
+
+    def _sync_channel_selector(self):
+        """Populates and displays the segmentation channel selector based on metadata."""
+        meta = image_manager.get_metadata()
+        if meta:
+            channels_count = meta.get("channels", 1)
+            if channels_count > 1:
+                self.channel_combo.blockSignals(True)
+                self.channel_combo.clear()
+                
+                names = state.channel_names
+                if not names or len(names) != channels_count:
+                    from lumen.core.fluorescence.channels import get_default_channel_names
+                    names = get_default_channel_names(channels_count, meta.get("filename", ""))
+                    state.channel_names = names
+                
+                for idx, name in enumerate(names):
+                    self.channel_combo.addItem(f"Channel {idx}: {name}", idx)
+                
+                seg_idx = self.channel_combo.findData(state.segmentation_channel)
+                if seg_idx >= 0:
+                    self.channel_combo.setCurrentIndex(seg_idx)
+                else:
+                    self.channel_combo.setCurrentIndex(0)
+                
+                self.channel_combo.blockSignals(False)
+                self.channel_frame.show()
+            else:
+                self.channel_frame.hide()
+        else:
+            self.channel_frame.hide()
 
     def _save_to_session(self):
         image_path = state.current_image_path
@@ -1049,6 +1513,7 @@ class AnalysisPage(QWidget):
         session.show_segmentation_overlay = state.show_segmentation_overlay
         session.segmentation_method = state.segmentation_method
         session.current_workflow = state.current_workflow
+        session.calibration_mode = state.calibration_mode
         
         v = self.image_viewer
         if v.pixmap_item and not v.pixmap_item.pixmap().isNull():
@@ -1103,8 +1568,24 @@ class AnalysisPage(QWidget):
                     self.mode_val.setText(meta.get("mode", "-").upper())
                     self.type_val.setText(meta.get("classification", "-"))
 
+                    voxel = meta.get("voxel_size")
+                    if voxel and isinstance(voxel, (list, tuple)) and len(voxel) >= 2:
+                        self.voxel_val.setText(f"{voxel[0]:.4f} {meta.get('physical_units', 'µm')}")
+                    else:
+                        self.voxel_val.setText("1.0000 px (Uncalibrated)")
+
                     self.meta_placeholder.setVisible(False)
                     self.meta_container.setVisible(True)
+                    
+                    self._sync_viewer_channel_combo()
+                    
+                    # Collapsible Naming Section visibility
+                    channels_count = meta.get("channels", 1)
+                    self.naming_section.setVisible(channels_count > 1)
+
+                    # Update Footer Status Bar
+                    self.footer_res.setText(f"Size: {meta.get('width')} × {meta.get('height')}")
+                    self.footer_zoom.setText(f"Zoom: {int(self.image_viewer.transform().m11() * 100)}%")
 
                 self.run_btn.setEnabled(True)
                 self.run_btn.setCursor(QCursor(Qt.PointingHandCursor))
@@ -1155,6 +1636,13 @@ class AnalysisPage(QWidget):
             state.segmentation_method = text
         self._save_to_session()
 
+    def _on_channel_combo_changed(self, index: int):
+        val = self.channel_combo.currentData()
+        if val is not None:
+            logger.info("AnalysisPage: Setting target segmentation channel selection to index %s", val)
+            state.segmentation_channel = val
+            self._save_to_session()
+
     # Slots to update UI controls from state changes
     @Slot(bool)
     def _on_state_show_original_changed(self, val: bool):
@@ -1189,12 +1677,18 @@ class AnalysisPage(QWidget):
         self.method_combo.blockSignals(True)
         if val == "AI Segmentation":
             self.method_combo.setCurrentText("AI Segmentation (Cellpose)")
-            self.quality_frame.setVisible(True)
         else:
             self.method_combo.setCurrentText(val)
-            self.quality_frame.setVisible(False)
         self.method_combo.blockSignals(False)
         self.force_layout_refresh()
+
+    @Slot(int)
+    def _on_state_segmentation_channel_changed(self, val: int):
+        self.channel_combo.blockSignals(True)
+        idx = self.channel_combo.findData(val)
+        if idx >= 0:
+            self.channel_combo.setCurrentIndex(idx)
+        self.channel_combo.blockSignals(False)
 
     @Slot(str)
     def _on_image_loaded(self, path: str):
@@ -1233,9 +1727,25 @@ class AnalysisPage(QWidget):
                     self.mode_val.setText(meta.get("mode", "-").upper())
                     self.type_val.setText(meta.get("classification", "-"))
 
+                    voxel = meta.get("voxel_size")
+                    if voxel and isinstance(voxel, (list, tuple)) and len(voxel) >= 2:
+                        self.voxel_val.setText(f"{voxel[0]:.4f} {meta.get('physical_units', 'µm')}")
+                    else:
+                        self.voxel_val.setText("1.0000 px (Uncalibrated)")
+
                     # Swap visibility
                     self.meta_placeholder.setVisible(False)
                     self.meta_container.setVisible(True)
+                    
+                    self._sync_viewer_channel_combo()
+                    
+                    # Collapsible Naming Section visibility
+                    channels_count = meta.get("channels", 1)
+                    self.naming_section.setVisible(channels_count > 1)
+
+                    # Update Footer Status Bar
+                    self.footer_res.setText(f"Size: {meta.get('width')} × {meta.get('height')}")
+                    self.footer_zoom.setText(f"Zoom: {int(self.image_viewer.transform().m11() * 100)}%")
 
                 self.run_btn.setEnabled(True)
                 self.run_btn.setCursor(QCursor(Qt.PointingHandCursor))
@@ -1248,6 +1758,11 @@ class AnalysisPage(QWidget):
         self._loaded_image_path = None
         self._loaded_image_origin = None
         self.image_viewer.clear()
+        self.naming_section.hide()
+        self.puncta_section.hide()
+        self.footer_res.setText("-")
+        self.footer_zoom.setText("Zoom: 100%")
+        
         self.force_layout_refresh()
         self.image_viewer.set_analysis_results(None)
         self.viewer_contrast_lbl.setVisible(False)
@@ -1273,68 +1788,21 @@ class AnalysisPage(QWidget):
             self.wf_combo.setCurrentIndex(idx)
         self.wf_combo.blockSignals(False)
 
-        # Toggle warning banner based on workflow mode
-        self.banner_frame.setVisible(wf_id == "fluorescence")
+        meta = image_manager.get_metadata()
+        channels_count = meta.get("channels", 1) if meta else 1
+
+        # Show/hide workflow-specific collapsible sections
         if wf_id == "fluorescence":
-            self.banner_lbl.hide()
-            self.fluorescence_panel.show()
-            self.banner_frame.setStyleSheet("""
-                #WorkflowBannerFrame {
-                    background-color: #17171C;
-                    border: 1px solid rgba(255, 255, 255, 0.06);
-                    border-radius: 8px;
-                    padding: 12px;
-                }
-            """)
+            self.naming_section.setVisible(channels_count > 1)
+            self.puncta_section.setVisible(False)
+        elif wf_id == "puncta":
+            self.naming_section.setVisible(False)
+            self.puncta_section.setVisible(True)
         else:
-            self.banner_lbl.show()
-            self.fluorescence_panel.hide()
-            self.banner_frame.setStyleSheet("""
-                #WorkflowBannerFrame {
-                    background-color: #3730A3;
-                    border: 1px solid #4338CA;
-                    border-radius: 4px;
-                    padding: 8px;
-                }
-            """)
+            self.naming_section.setVisible(False)
+            self.puncta_section.setVisible(False)
 
-
-        wf = workflow_manager.get_workflow(wf_id)
-        if wf:
-            # Clear previous steps
-            for i in reversed(range(self.steps_layout.count())): 
-                widget = self.steps_layout.itemAt(i).widget()
-                if widget is not None:
-                    widget.deleteLater()
-
-            # Render standard pipeline outline steps: 1. Preprocessing, 2. Segmentation, etc.
-            pipeline_steps = [
-                "Preprocessing",
-                "Segmentation",
-                "Counting & Extraction",
-                "Quantification Report"
-            ]
-            for idx, step in enumerate(pipeline_steps):
-                step_lbl = QLabel(f" {idx + 1}. {step}")
-                step_lbl.setToolTip("Coming in upcoming analysis phases")
-                step_lbl.setCursor(Qt.ArrowCursor)
-                step_lbl.setStyleSheet("""
-                    QLabel {
-                        background-color: #24242B;
-                        border: 1px solid #2B2B35;
-                        border-radius: 4px;
-                        padding: 8px;
-                        font-size: 11px;
-                        color: #E5E7EB;
-                    }
-                """)
-                self.steps_layout.addWidget(step_lbl)
-        else:
-            # Clean layout
-            for i in reversed(range(self.steps_layout.count())): 
-                widget = self.steps_layout.itemAt(i).widget()
-                if widget is not None:
-                    widget.deleteLater()
+        self.force_layout_refresh()
 
     def _on_workflow_combo_changed(self, index: int):
         wf_id = self.wf_combo.itemData(index)
@@ -1380,10 +1848,16 @@ class AnalysisPage(QWidget):
             
         from lumen.core.fluorescence.quantifier import quantify_fluorescence
         try:
+            metadata = image_manager.get_metadata()
+            voxel_size = metadata.get("voxel_size", (1.0, 1.0, 1.0))
+            calibration_mode = state.calibration_mode
+
             results = quantify_fluorescence(
                 raw_channels=raw_channels,
                 masks=masks,
-                channel_names=channel_names
+                channel_names=channel_names,
+                voxel_size=voxel_size,
+                calibration_mode=calibration_mode
             )
             state.fluorescence_results = results
             
@@ -1482,6 +1956,12 @@ class AnalysisPage(QWidget):
         self.status_lbl.setVisible(True)
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
+        
+        # Show loading overlay
+        is_gpu, _ = gpu_service.resolve_execution_backend("Use Global Setting")
+        self.image_viewer.show_loading("Starting analysis pipeline...", gpu_active=is_gpu)
+        self.footer_status.setText("Starting analysis...")
+        
         self.force_layout_refresh()
 
         logger.info(
@@ -1527,19 +2007,27 @@ class AnalysisPage(QWidget):
     @Slot(int)
     def _on_analysis_progress(self, value: int):
         self.progress_bar.setValue(value)
+        self.footer_status.setText(f"Analyzing... {value}%")
 
     @Slot(str)
     def _on_analysis_status(self, status_msg: str):
         self.status_lbl.setText(status_msg)
+        is_gpu, _ = gpu_service.resolve_execution_backend("Use Global Setting")
+        self.image_viewer.show_loading(status_msg, gpu_active=is_gpu)
+        self.footer_status.setText(status_msg)
 
     @Slot(dict)
     def _on_analysis_finished(self, results: dict):
         logger.info("AnalysisPage: Analysis finished successfully.")
         
+        self.image_viewer.hide_loading()
+        self.footer_status.setText("Analysis finished")
+        
         # Restore button and hide progress
         self.run_btn.setEnabled(True)
         self.run_btn.setText("Run Analysis")
         self.run_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        self.run_btn.setFocus() # Anchor focus back to sidebar
         self._set_controls_enabled(True)
         self.status_lbl.setVisible(False)
         self.progress_bar.setVisible(False)
@@ -1990,6 +2478,12 @@ class AnalysisPage(QWidget):
         state.manual_mask_saved.emit(image_path)
         return True
 
+    @Slot(str)
+    def _on_calibration_mode_changed(self, mode: str):
+        logger.info("AnalysisPage: Calibration mode changed to %s. Re-running quantification.", mode)
+        if state.current_workflow == "fluorescence":
+            self._run_fluorescence_quantification()
+
     @Slot(bool)
     def _on_dirty_state_changed(self, is_dirty: bool):
         self.save_analysis_btn.setEnabled(is_dirty)
@@ -2003,6 +2497,9 @@ class AnalysisPage(QWidget):
     @Slot(str)
     def _on_analysis_failed(self, error_msg: str):
         logger.error("AnalysisPage: Analysis failed: %s", error_msg)
+        
+        self.image_viewer.hide_loading()
+        self.footer_status.setText("Analysis failed")
         
         # Restore button and hide progress
         self.run_btn.setEnabled(True)
@@ -2026,9 +2523,10 @@ class AnalysisPage(QWidget):
         self.image_viewer.sync_theme(theme)
         if hasattr(self, 'workspace_switcher'):
             self.workspace_switcher.sync_theme(theme)
+            
         if theme == "light":
-            # Style splitter handle for light mode
-            self.right_splitter.setStyleSheet("""
+            # 1. Main Splitter handle light mode styling
+            self.main_splitter.setStyleSheet("""
                 QSplitter::handle {
                     background-color: #E5E7EB;
                     width: 5px;
@@ -2037,49 +2535,48 @@ class AnalysisPage(QWidget):
                     background-color: #4F46E5;
                 }
             """)
-            # Adjust controls bar style for light mode
+            
+            # 2. Controls bar light mode
             self.viewer_controls_bar.setStyleSheet("""
                 #ViewerControlsBar {
                     background-color: #FFFFFF;
                     border: 1px solid #D1D5DB;
-                    border-radius: 6px;
-                    padding: 6px 12px;
+                    border-radius: 8px;
                 }
             """)
             self.show_original_chk.setStyleSheet("font-size: 11px; color: #1F2937;")
             self.show_overlay_chk.setStyleSheet("font-size: 11px; color: #1F2937;")
             self.opacity_val_lbl.setStyleSheet("font-size: 11px; color: #1F2937;")
             self.viewer_contrast_lbl.setStyleSheet("font-size: 10px; color: #4F46E5; font-weight: bold; background: transparent;")
-            
-            # Adjust panels styling
+
+            # 3. Left Panel light mode
             self.left_panel.setStyleSheet("""
                 #AnalysisLeftPanel {
                     background-color: #FFFFFF;
                     border: 1px solid #D1D5DB;
                     border-radius: 8px;
-                    padding: 16px;
                 }
             """)
+            
+            # 4. Right Panel light mode
             self.right_panel.setStyleSheet("""
                 #AnalysisRightPanel {
                     background-color: #FFFFFF;
                     border: 1px solid #D1D5DB;
                     border-radius: 8px;
-                    padding: 16px;
                 }
             """)
-            left_lbls = self.left_panel.findChildren(QLabel)
-            for lbl in left_lbls:
-                if lbl.objectName() != "PageTitle":
-                    lbl.setStyleSheet("color: #1F2937;")
-            
+
+            # 5. Metadata values light mode
             self.fn_val.setStyleSheet("color: #111827; font-weight: bold; font-size: 12px;")
             self.res_val.setStyleSheet("color: #4B5563; font-size: 12px;")
             self.ch_val.setStyleSheet("color: #4B5563; font-size: 12px;")
             self.mode_val.setStyleSheet("color: #4B5563; font-size: 12px;")
-            self.type_val.setStyleSheet("color: #4F46E5; font-size: 12px; font-weight: 600;")
-            
-            self.edit_btn.setStyleSheet("""
+            self.voxel_val.setStyleSheet("color: #4B5563; font-size: 12px;")
+            self.type_val.setStyleSheet("color: #4F46E5; font-size: 12px; font-weight: bold;")
+
+            # 6. Action buttons light mode
+            btn_style = """
                 QPushButton {
                     padding: 8px;
                     background-color: #FFFFFF;
@@ -2095,75 +2592,28 @@ class AnalysisPage(QWidget):
                     border: 1px solid #E5E7EB;
                     color: #9CA3AF;
                 }
-            """)
-            
-            self.save_analysis_btn.setStyleSheet("""
+            """
+            self.edit_btn.setStyleSheet(btn_style)
+            self.save_analysis_btn.setStyleSheet(btn_style)
+            self.reset_changes_btn.setStyleSheet(btn_style)
+
+            self.run_btn.setStyleSheet("""
                 QPushButton {
-                    padding: 8px;
-                    background-color: #FFFFFF;
-                    border: 1px solid #D1D5DB;
-                    color: #4B5563;
-                    border-radius: 4px;
+                    background-color: #4F46E5;
+                    color: #FFFFFF;
                     font-weight: bold;
-                    font-size: 11px;
+                    font-size: 13px;
+                    border-radius: 6px;
                 }
-                QPushButton:hover { background-color: #F3F4F6; }
+                QPushButton:hover {
+                    background-color: #4338CA;
+                }
                 QPushButton:disabled {
-                    background-color: #F9FAFB;
-                    border: 1px solid #E5E7EB;
+                    background-color: #E5E7EB;
                     color: #9CA3AF;
                 }
             """)
-            
-            self.reset_changes_btn.setStyleSheet("""
-                QPushButton {
-                    padding: 8px;
-                    background-color: #FFFFFF;
-                    border: 1px solid #D1D5DB;
-                    color: #4B5563;
-                    border-radius: 4px;
-                    font-weight: bold;
-                    font-size: 11px;
-                }
-                QPushButton:hover { background-color: #F3F4F6; }
-                QPushButton:disabled {
-                    background-color: #F9FAFB;
-                    border: 1px solid #E5E7EB;
-                    color: #9CA3AF;
-                }
-            """)
-            
-            self.wf_lbl.setStyleSheet("font-weight: bold; font-size: 11px; color: #4F46E5; text-transform: uppercase;")
-            self.model_lbl.setStyleSheet("font-size: 10px; font-weight: bold; color: #4B5563; text-transform: uppercase;")
-            self.banner_frame.setStyleSheet("""
-                #WorkflowBannerFrame {
-                    background-color: #EEF2F6;
-                    border: 1px solid #C7D2FE;
-                    border-radius: 4px;
-                    padding: 8px;
-                }
-            """)
-            self.banner_lbl.setStyleSheet("color: #4338CA; font-size: 11px; font-weight: 500;")
-            self.right_panel.findChildren(QLabel)[0].setStyleSheet("font-size: 15px; font-weight: bold; color: #111827;")
- 
-            # Sync steps labels inside layout
-            for i in range(self.steps_layout.count()):
-                w = self.steps_layout.itemAt(i).widget()
-                if w:
-                    w.setStyleSheet("""
-                        background-color: #F3F4F6;
-                        border: 1px solid #D1D5DB;
-                        border-radius: 4px;
-                        padding: 8px;
-                        font-size: 11px;
-                        color: #1F2937;
-                    """)
-            
-            # Light mode quality selector label
-            self.quality_lbl.setStyleSheet("font-size: 10px; font-weight: bold; color: #4B5563; text-transform: uppercase;")
-            self.method_lbl.setStyleSheet("font-size: 10px; font-weight: bold; color: #4B5563; text-transform: uppercase;")
-            
-            # Light mode progress and status styles
+
             self.status_lbl.setStyleSheet("font-size: 11px; color: #4B5563; margin-bottom: 4px;")
             self.progress_bar.setStyleSheet("""
                 QProgressBar {
@@ -2176,9 +2626,22 @@ class AnalysisPage(QWidget):
                     border-radius: 3px;
                 }
             """)
+            
+            # Footer styling light mode
+            self.footer_bar.setStyleSheet("""
+                #AnalysisFooterBar {
+                    background-color: #F3F4F6;
+                    border-top: 1px solid #D1D5DB;
+                }
+            """)
+            self.footer_status.setStyleSheet("font-size: 11px; color: #4B5563;")
+            self.footer_gpu.setStyleSheet("font-size: 11px; color: #4B5563;")
+            self.footer_res.setStyleSheet("font-size: 11px; color: #4B5563;")
+            self.footer_zoom.setStyleSheet("font-size: 11px; color: #4B5563;")
+
         else:
-            # Style splitter handle for dark mode
-            self.right_splitter.setStyleSheet("""
+            # 1. Main Splitter handle dark mode styling
+            self.main_splitter.setStyleSheet("""
                 QSplitter::handle {
                     background-color: #2B2B35;
                     width: 5px;
@@ -2187,43 +2650,48 @@ class AnalysisPage(QWidget):
                     background-color: #6366F1;
                 }
             """)
-            # Adjust controls bar style for dark mode
+            
+            # 2. Controls bar dark mode
             self.viewer_controls_bar.setStyleSheet("""
                 #ViewerControlsBar {
                     background-color: #1C1C22;
                     border: 1px solid #2B2B35;
-                    border-radius: 6px;
-                    padding: 6px 12px;
+                    border-radius: 8px;
                 }
             """)
             self.show_original_chk.setStyleSheet("font-size: 11px; color: #E5E7EB;")
             self.show_overlay_chk.setStyleSheet("font-size: 11px; color: #E5E7EB;")
             self.opacity_val_lbl.setStyleSheet("font-size: 11px; color: #E5E7EB;")
             self.viewer_contrast_lbl.setStyleSheet("font-size: 10px; color: #818CF8; font-weight: bold; background: transparent;")
-            
+
+            # 3. Left Panel dark mode
             self.left_panel.setStyleSheet("""
                 #AnalysisLeftPanel {
                     background-color: #1C1C22;
                     border: 1px solid #2B2B35;
                     border-radius: 8px;
-                    padding: 16px;
                 }
             """)
+            
+            # 4. Right Panel dark mode
             self.right_panel.setStyleSheet("""
                 #AnalysisRightPanel {
                     background-color: #1C1C22;
                     border: 1px solid #2B2B35;
                     border-radius: 8px;
-                    padding: 16px;
                 }
             """)
+
+            # 5. Metadata values dark mode
             self.fn_val.setStyleSheet("color: #FFFFFF; font-weight: bold; font-size: 12px;")
             self.res_val.setStyleSheet("color: #E5E7EB; font-size: 12px;")
             self.ch_val.setStyleSheet("color: #E5E7EB; font-size: 12px;")
             self.mode_val.setStyleSheet("color: #E5E7EB; font-size: 12px;")
-            self.type_val.setStyleSheet("color: #6366F1; font-size: 12px; font-weight: 600;")
-            
-            self.edit_btn.setStyleSheet("""
+            self.voxel_val.setStyleSheet("color: #E5E7EB; font-size: 12px;")
+            self.type_val.setStyleSheet("color: #6366F1; font-size: 12px; font-weight: bold;")
+
+            # 6. Action buttons dark mode
+            btn_style = """
                 QPushButton {
                     padding: 8px;
                     background-color: #24242B;
@@ -2239,74 +2707,28 @@ class AnalysisPage(QWidget):
                     border: 1px solid #222227;
                     color: #4B5563;
                 }
-            """)
-            
-            self.save_analysis_btn.setStyleSheet("""
+            """
+            self.edit_btn.setStyleSheet(btn_style)
+            self.save_analysis_btn.setStyleSheet(btn_style)
+            self.reset_changes_btn.setStyleSheet(btn_style)
+
+            self.run_btn.setStyleSheet("""
                 QPushButton {
-                    padding: 8px;
-                    background-color: #24242B;
-                    border: 1px solid #2B2B35;
-                    color: #D1D5DB;
-                    border-radius: 4px;
+                    background-color: #6366F1;
+                    color: #FFFFFF;
                     font-weight: bold;
-                    font-size: 11px;
+                    font-size: 13px;
+                    border-radius: 6px;
                 }
-                QPushButton:hover { background-color: #2D2D37; color: #FFFFFF; }
+                QPushButton:hover {
+                    background-color: #4F46E5;
+                }
                 QPushButton:disabled {
-                    background-color: #16161A;
-                    border: 1px solid #222227;
+                    background-color: #1F1F24;
                     color: #4B5563;
                 }
             """)
-            
-            self.reset_changes_btn.setStyleSheet("""
-                QPushButton {
-                    padding: 8px;
-                    background-color: #24242B;
-                    border: 1px solid #2B2B35;
-                    color: #D1D5DB;
-                    border-radius: 4px;
-                    font-weight: bold;
-                    font-size: 11px;
-                }
-                QPushButton:hover { background-color: #2D2D37; color: #FFFFFF; }
-                QPushButton:disabled {
-                    background-color: #16161A;
-                    border: 1px solid #222227;
-                    color: #4B5563;
-                }
-            """)
-            
-            self.wf_lbl.setStyleSheet("font-weight: bold; font-size: 11px; color: #6366F1; text-transform: uppercase;")
-            self.model_lbl.setStyleSheet("font-size: 10px; font-weight: bold; color: #6B7280; text-transform: uppercase;")
-            self.banner_frame.setStyleSheet("""
-                #WorkflowBannerFrame {
-                    background-color: #3730A3;
-                    border: 1px solid #4338CA;
-                    border-radius: 4px;
-                    padding: 8px;
-                }
-            """)
-            self.banner_lbl.setStyleSheet("color: #E0E7FF; font-size: 11px; font-weight: 500;")
-            self.right_panel.findChildren(QLabel)[0].setStyleSheet("font-size: 15px; font-weight: bold; color: #FFFFFF;")
-            
-            for i in range(self.steps_layout.count()):
-                w = self.steps_layout.itemAt(i).widget()
-                if w:
-                    w.setStyleSheet("""
-                        background-color: #24242B;
-                        border: 1px solid #2B2B35;
-                        border-radius: 4px;
-                        padding: 8px;
-                        font-size: 11px;
-                        color: #E5E7EB;
-                    """)
-            
-            # Dark mode quality selector label
-            self.quality_lbl.setStyleSheet("font-size: 10px; font-weight: bold; color: #6B7280; text-transform: uppercase;")
-            self.method_lbl.setStyleSheet("font-size: 10px; font-weight: bold; color: #6B7280; text-transform: uppercase;")
-            
-            # Dark mode progress and status styles
+
             self.status_lbl.setStyleSheet("font-size: 11px; color: #9CA3AF; margin-bottom: 4px;")
             self.progress_bar.setStyleSheet("""
                 QProgressBar {
@@ -2319,3 +2741,15 @@ class AnalysisPage(QWidget):
                     border-radius: 3px;
                 }
             """)
+            
+            # Footer styling dark mode
+            self.footer_bar.setStyleSheet("""
+                #AnalysisFooterBar {
+                    background-color: #0E0E12;
+                    border-top: 1px solid #2B2B35;
+                }
+            """)
+            self.footer_status.setStyleSheet("font-size: 11px; color: #9EA4B0;")
+            self.footer_gpu.setStyleSheet("font-size: 11px; color: #9EA4B0;")
+            self.footer_res.setStyleSheet("font-size: 11px; color: #9EA4B0;")
+            self.footer_zoom.setStyleSheet("font-size: 11px; color: #9EA4B0;")

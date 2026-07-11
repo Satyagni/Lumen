@@ -17,7 +17,7 @@ ICONS_DIR = ASSETS_DIR / "icons"
 THEMES_DIR = LUMEN_DIR / "ui" / "themes"
 
 # File Validation
-ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tiff", ".tif"}
+ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".czi"}
 
 # Database Settings
 DB_FILE = WORKSPACE_DIR / "lumen.db"

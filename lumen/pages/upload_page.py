@@ -200,7 +200,7 @@ class DropZoneWidget(QFrame):
                 self,
                 "Select Biological Image",
                 "",
-                "Microscopy Images (*.png *.jpg *.jpeg *.tiff *.tif);;All Files (*)"
+                "Microscopy Images (*.png *.jpg *.jpeg *.tiff *.tif *.czi);;All Files (*)"
             )
             if file_path:
                 self.file_dropped.emit(file_path)
@@ -248,7 +248,7 @@ class FolderDropZoneWidget(QFrame):
         self.secondary_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.secondary_label)
 
-        self.helper_label = QLabel("TIFF/TIF/PNG supported • more formats coming")
+        self.helper_label = QLabel("TIFF/TIF/PNG/CZI supported")
         self.helper_label.setStyleSheet("font-size: 10px; color: #6B7280; background: transparent; border: none;")
         self.helper_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.helper_label)
@@ -726,6 +726,7 @@ class UploadPage(QWidget):
             self._update_ui_with_image()
         else:
             logger.error("UploadPage: Load failed: %s", msg)
+            QMessageBox.critical(self, "Load Failed", f"Failed to load image file:\n{msg}")
 
     def _update_ui_with_image(self):
         meta = self.local_image_manager.get_metadata()

@@ -22,12 +22,16 @@ from lumen.pages.analysis_page import InteractiveImageViewer
 
 def load_microscopy_pixmap(file_path: str) -> QPixmap:
     """Loads a raw high-depth or standard microscopy image from file path with display normalization."""
-    ext = os.path.splitext(file_path)[1].lower()
-    if ext in [".tif", ".tiff"]:
-        raw_arr = tifffile.imread(file_path)
+    from lumen.core.imaging import ImageReaderFactory
+    reader = ImageReaderFactory.get_reader(file_path)
+    reader.open(file_path)
+    meta = reader.get_metadata()
+    raw_channels = [reader.read_slice(channel=c).image for c in range(meta.channels)]
+    if len(raw_channels) == 1:
+        raw_arr = raw_channels[0]
     else:
-        with PIL.Image.open(file_path) as pil_img:
-            raw_arr = np.asarray(pil_img)
+        raw_arr = np.stack(raw_channels, axis=-1)
+    reader.close()
             
     if raw_arr is None or raw_arr.size == 0:
         return QPixmap()
@@ -969,7 +973,11 @@ class BatchResultsExplorerPage(QWidget):
         masks = None
         if labels_path.exists():
             try:
-                masks = tifffile.imread(str(labels_path))
+                from lumen.core.imaging import ImageReaderFactory
+                reader = ImageReaderFactory.get_reader(str(labels_path))
+                reader.open(str(labels_path))
+                masks = reader.read_slice().image
+                reader.close()
             except Exception as e:
                 logger.error("BatchExplorer: Failed to load raw masks: %s", e)
 
@@ -1150,7 +1158,11 @@ class BatchResultsExplorerPage(QWidget):
         masks = None
         if labels_path.exists():
             try:
-                masks = tifffile.imread(str(labels_path))
+                from lumen.core.imaging import ImageReaderFactory
+                reader = ImageReaderFactory.get_reader(str(labels_path))
+                reader.open(str(labels_path))
+                masks = reader.read_slice().image
+                reader.close()
             except Exception as e:
                 logger.error("BatchExplorer: Failed to load raw masks for analysis redirection: %s", e)
                 

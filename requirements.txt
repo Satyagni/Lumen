@@ -5,3 +5,4 @@ pillow
 cellpose<4.0.0
 torch
 packaging
+aicspylibczi

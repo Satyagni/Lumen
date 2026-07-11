@@ -3,7 +3,7 @@ from pathlib import Path
 
 # Application Metadata
 APP_NAME = "Lumen"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.4.0"
 APP_SUBTITLE = "AI-Assisted Biological Image Analysis"
 
 # Directory Structure

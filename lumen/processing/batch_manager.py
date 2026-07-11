@@ -619,7 +619,7 @@ class BatchProcessingManager(QObject):
                 f.write("====================================================\n")
                 f.write("          LUMEN BATCH ANALYSIS REPRODUCIBILITY METADATA\n")
                 f.write("====================================================\n")
-                f.write(f"Lumen Version: 0.2.0\n")
+                f.write(f"Lumen Version: 0.4.0\n")
                 f.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"Active Workflow: {get_current_workflow_name()}\n")
                 f.write(f"Segmentation Method: {seg_method}\n")

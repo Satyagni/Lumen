@@ -6,6 +6,7 @@ and spot-finding phase, decoupling raw detection from downstream cell-mask assig
 
 import numpy as np
 from dataclasses import dataclass
+from typing import Dict, List
 
 @dataclass(slots=True)
 class PunctaDetectionResult:
@@ -17,4 +18,18 @@ class PunctaDetectionResult:
     """
     labels: np.ndarray
     object_ids: np.ndarray
+
+@dataclass(slots=True)
+class PunctaAssignmentResult:
+    """Output from the puncta-to-cell assignment stage.
+    
+    Attributes:
+        cell_to_puncta: Dictionary mapping Cell ID (int) -> sorted List of assigned puncta IDs (list of ints).
+        punctum_to_cell: Dictionary mapping Punctum ID (int) -> assigned Cell ID (int).
+        unassigned_puncta: Sorted list of puncta IDs (ints) that fell into the background.
+    """
+    cell_to_puncta: Dict[int, List[int]]
+    punctum_to_cell: Dict[int, int]
+    unassigned_puncta: List[int]
+
 

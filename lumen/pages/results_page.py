@@ -542,7 +542,7 @@ class ResultsPage(QWidget):
 
         try:
             from lumen.core.fluorescence.exporters import export_cell_csv
-            export_cell_csv(results, file_path)
+            export_cell_csv(results, file_path, calibration_mode=state.calibration_mode)
             logger.info("ResultsPage: Successfully exported Cell CSV: %s", file_path)
             QMessageBox.information(self, "Export Complete", "Cell CSV exported successfully!")
         except Exception as e:
@@ -587,7 +587,8 @@ class ResultsPage(QWidget):
                 preprocessing_settings=pre_settings,
                 segmentation_settings=seg_settings,
                 timestamp=timestamp,
-                file_path=file_path
+                file_path=file_path,
+                calibration_mode=state.calibration_mode
             )
             logger.info("ResultsPage: Successfully exported Summary CSV: %s", file_path)
             QMessageBox.information(self, "Export Complete", "Summary CSV exported successfully!")
@@ -682,12 +683,16 @@ def generate_overlay_image(image_path: str, masks: np.ndarray) -> PIL.Image.Imag
     if masks is None:
         raise ValueError("Masks not found in current analysis results.")
 
-    ext = Path(image_path).suffix.lower()
-    if ext in [".tif", ".tiff"]:
-        raw_arr = tifffile.imread(image_path)
+    from lumen.core.imaging import ImageReaderFactory
+    reader = ImageReaderFactory.get_reader(image_path)
+    reader.open(image_path)
+    meta = reader.get_metadata()
+    raw_channels = [reader.read_slice(channel=c).image for c in range(meta.channels)]
+    if len(raw_channels) == 1:
+        raw_arr = raw_channels[0]
     else:
-        with PIL.Image.open(image_path) as pil_img:
-            raw_arr = np.asarray(pil_img)
+        raw_arr = np.stack(raw_channels, axis=-1)
+    reader.close()
 
     # 1st/99th percentile normalization
     p1 = np.percentile(raw_arr, 1)
@@ -776,6 +781,25 @@ def export_pdf_report(file_path: str, image_path: str, quality_mode: str, curren
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         backend = "GPU (CUDA)" if results.get("used_gpu") else "CPU"
         
+        # Calibration mode scaling (PR 5)
+        calibration_mode = state.calibration_mode
+        from lumen.processing.image_manager import image_manager
+        meta = image_manager.get_metadata()
+        voxel_size = meta.get("voxel_size", (1.0, 1.0, 1.0))
+        dx, dy = voxel_size[0], voxel_size[1]
+        pixel_spacing = (dx + dy) / 2.0
+        pixel_area = dx * dy
+
+        area_unit = "µm²" if calibration_mode == "micron" else "px²"
+        dist_unit = "µm" if calibration_mode == "micron" else "px"
+        density_unit = f"cells/{area_unit}"
+
+        if calibration_mode == "micron":
+            avg_diameter *= pixel_spacing
+            mean_area *= pixel_area
+            median_area *= pixel_area
+            cell_density /= pixel_area
+
         # Resolve active workflow name
         workflow_name = "Cell Segmentation"
         if current_workflow:
@@ -794,11 +818,16 @@ def export_pdf_report(file_path: str, image_path: str, quality_mode: str, curren
             m = metrics_dict[cell_id]
             cx, cy = m["centroid"]
             bg = "#F9FAFB" if idx % 2 == 0 else "#FFFFFF"
+            
+            area_val = m['area_px'] * pixel_area if calibration_mode == "micron" else m['area_px']
+            diam_val = m['diameter_px'] * pixel_spacing if calibration_mode == "micron" else m['diameter_px']
+            area_str = f"{area_val:.2f}" if calibration_mode == "micron" else f"{int(area_val)}"
+            
             rows_html += f"""
             <tr style="background-color: {bg};">
                 <td style="padding: 8px; border: 1px solid #D1D5DB; font-weight: bold; font-size: 9.5pt;">{cell_id}</td>
-                <td style="padding: 8px; border: 1px solid #D1D5DB; font-size: 9.5pt;">{m['area_px']}</td>
-                <td style="padding: 8px; border: 1px solid #D1D5DB; font-size: 9.5pt;">{m['diameter_px']:.2f}</td>
+                <td style="padding: 8px; border: 1px solid #D1D5DB; font-size: 9.5pt;">{area_str}</td>
+                <td style="padding: 8px; border: 1px solid #D1D5DB; font-size: 9.5pt;">{diam_val:.2f}</td>
                 <td style="padding: 8px; border: 1px solid #D1D5DB; font-family: monospace; font-size: 9.5pt;">({cx:.1f}, {cy:.1f})</td>
             </tr>
             """
@@ -887,19 +916,19 @@ def export_pdf_report(file_path: str, image_path: str, quality_mode: str, curren
                                 </tr>
                                 <tr>
                                     <td style="font-weight: bold; color: #4B5563; padding: 4px 0;">Mean Cell Area:</td>
-                                    <td style="color: #1F2937; padding: 4px 0;">{mean_area:.2f} px&sup2;</td>
+                                    <td style="color: #1F2937; padding: 4px 0;">{mean_area:.2f} {area_unit}</td>
                                 </tr>
                                 <tr>
                                     <td style="font-weight: bold; color: #4B5563; padding: 4px 0;">Median Cell Area:</td>
-                                    <td style="color: #1F2937; padding: 4px 0;">{median_area:.2f} px&sup2;</td>
+                                    <td style="color: #1F2937; padding: 4px 0;">{median_area:.2f} {area_unit}</td>
                                 </tr>
                                 <tr>
                                     <td style="font-weight: bold; color: #4B5563; padding: 4px 0;">Avg Cell Diameter:</td>
-                                    <td style="color: #1F2937; padding: 4px 0;">{avg_diameter:.2f} px</td>
+                                    <td style="color: #1F2937; padding: 4px 0;">{avg_diameter:.2f} {dist_unit}</td>
                                 </tr>
                                 <tr>
                                     <td style="font-weight: bold; color: #4B5563; padding: 4px 0;">Estimated Density:</td>
-                                    <td style="color: #1F2937; padding: 4px 0;">{cell_density:.2e} cells/px&sup2;</td>
+                                    <td style="color: #1F2937; padding: 4px 0;">{cell_density:.2e} {density_unit}</td>
                                 </tr>
                             </table>
                         </td>
@@ -924,8 +953,8 @@ def export_pdf_report(file_path: str, image_path: str, quality_mode: str, curren
                         <thead>
                             <tr style="background-color: #F3F4F6;">
                                 <th style="padding: 8px; font-weight: bold; border: 1px solid #D1D5DB; text-align: left; font-size: 9.5pt; color: #374151; width: 20%;">Cell ID</th>
-                                <th style="padding: 8px; font-weight: bold; border: 1px solid #D1D5DB; text-align: left; font-size: 9.5pt; color: #374151; width: 25%;">Area (px&sup2;)</th>
-                                <th style="padding: 8px; font-weight: bold; border: 1px solid #D1D5DB; text-align: left; font-size: 9.5pt; color: #374151; width: 25%;">Diameter (px)</th>
+                                <th style="padding: 8px; font-weight: bold; border: 1px solid #D1D5DB; text-align: left; font-size: 9.5pt; color: #374151; width: 25%;">Area ({area_unit})</th>
+                                <th style="padding: 8px; font-weight: bold; border: 1px solid #D1D5DB; text-align: left; font-size: 9.5pt; color: #374151; width: 25%;">Diameter ({dist_unit})</th>
                                 <th style="padding: 8px; font-weight: bold; border: 1px solid #D1D5DB; text-align: left; font-size: 9.5pt; color: #374151; width: 30%;">Centroid (x, y)</th>
                             </tr>
                         </thead>

@@ -45,11 +45,11 @@ def classify_image(filename: str, channels: int, mode: str, format_str: str) -> 
     # 1. Rule: Fluorescence Microscopy
     fluor_keywords = ["dapi", "fitc", "gfp", "fluor", "nuclei", "stain"]
     has_fluor_keyword = any(kw in fn_lower for kw in fluor_keywords)
-    is_grayscale_tiff = (mode == "grayscale" or channels == 1) and ext_lower in [".tiff", ".tif"]
+    is_czi_or_fluor_structure = ((mode == "grayscale" or channels == 1) and ext_lower in [".tiff", ".tif"]) or ext_lower == ".czi"
 
-    if has_fluor_keyword or is_grayscale_tiff:
+    if has_fluor_keyword or is_czi_or_fluor_structure:
         confidence = "High" if has_fluor_keyword else "Moderate"
-        logger.info("Classifier: Fluorescence Microscopy detected. Rule source: keyword=%s, structure=%s", has_fluor_keyword, is_grayscale_tiff)
+        logger.info("Classifier: Fluorescence Microscopy detected. Rule source: keyword=%s, structure=%s", has_fluor_keyword, is_czi_or_fluor_structure)
         return {
             "type": "Fluorescence Microscopy",
             "confidence": confidence,

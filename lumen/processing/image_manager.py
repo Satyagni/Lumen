@@ -56,55 +56,32 @@ class ImageManager:
             # Clear old state
             self.clear_cache()
 
+            from lumen.core.imaging import ImageReaderFactory
+
             # Determine extension
             ext = Path(file_path).suffix.lower()
             filename = os.path.basename(file_path)
 
-            # Load raw image as NumPy array using tifffile for TIFFs, PIL for others
-            if ext in [".tif", ".tiff"]:
-                raw_arr = tifffile.imread(file_path)
-                img_format = "TIFF"
+            # Load using unified ImageReaderFactory
+            reader = ImageReaderFactory.get_reader(file_path)
+            reader.open(file_path)
+            meta = reader.get_metadata()
+
+            channels = meta.channels
+            height = meta.dimensions[0]
+            width = meta.dimensions[1]
+            mode = meta.mode
+            bit_depth = meta.bit_depth
+            img_format = meta.raw_metadata.get("pil_format", "TIFF") if "pil_format" in meta.raw_metadata else "TIFF"
+
+            # Retrieve channel slices
+            self._raw_channels = [reader.read_slice(channel=c).image for c in range(channels)]
+            if channels == 1:
+                raw_arr = self._raw_channels[0]
             else:
-                with PIL.Image.open(file_path) as pil_img:
-                    raw_arr = np.asarray(pil_img)
-                    img_format = pil_img.format if pil_img.format else ext[1:].upper()
+                raw_arr = np.stack(self._raw_channels, axis=-1)
 
-            if not isinstance(raw_arr, np.ndarray) or raw_arr.size == 0:
-                return False, "Failed to load image into a valid NumPy array."
-
-            # Transpose (C, H, W) to (H, W, C) if first dimension represents channels
-            ndim = raw_arr.ndim
-            if ndim == 3:
-                # Heuristic: normally height/width are large, channels C <= 10
-                if raw_arr.shape[0] <= 10 and raw_arr.shape[2] > 10:
-                    raw_arr = np.transpose(raw_arr, (1, 2, 0))
-
-            # Determine channels and mode from array shape
-            shape = raw_arr.shape
-            if ndim == 2:
-                height, width = shape[0], shape[1]
-                channels = 1
-                mode = "grayscale"
-                self._raw_channels = [raw_arr]
-            elif ndim == 3:
-                height, width = shape[0], shape[1]
-                channels = shape[2]
-                if channels in [3, 4]:
-                    mode = "rgb"
-                elif channels == 1:
-                    mode = "grayscale"
-                    raw_arr = raw_arr[..., 0]  # squeeze to 2D
-                    channels = 1
-                    self._raw_channels = [raw_arr]
-                else:
-                    mode = "rgb" if channels >= 3 else "grayscale"
-                
-                if channels > 1:
-                    self._raw_channels = [raw_arr[..., c] for c in range(channels)]
-            else:
-                return False, f"Unsupported image array dimensions: {ndim}"
-
-            bit_depth = raw_arr.dtype.itemsize * 8
+            reader.close()
             file_size_kb = os.path.getsize(file_path) / 1024
 
             # Heuristic Biological Classification
@@ -114,9 +91,8 @@ class ImageManager:
             # Initialize active channel index: composite (-1) if multi-channel, else 0
             self._active_channel_idx = -1 if channels > 1 else 0
 
-            # Dynamic Channel Naming registry
-            from lumen.core.fluorescence.channels import get_default_channel_names
-            self._channel_names = get_default_channel_names(channels, filename)
+            # Set channel names from reader metadata
+            self._channel_names = meta.channel_names
 
             # Generate cached display images
             self._update_cached_images()
@@ -138,7 +114,9 @@ class ImageManager:
                 "size_kb": round(file_size_kb, 2),
                 "classification": classification_data["type"],
                 "confidence": classification_data["confidence"],
-                "recommended_workflows": classification_data["workflows"]
+                "recommended_workflows": classification_data["workflows"],
+                "voxel_size": meta.voxel_size,
+                "physical_units": meta.physical_units
             }
 
             logger.info(

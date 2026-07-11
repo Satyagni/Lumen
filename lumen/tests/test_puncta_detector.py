@@ -255,3 +255,44 @@ class TestPunctaDetector(unittest.TestCase):
             
         with self.assertRaises(TypeError):
             detector.detect(img, {})  # type: ignore
+
+    def test_detector_micron_mode(self):
+        """Verifies PunctaDetector scaling of sigma and spot sizes in micron mode."""
+        from lumen.core.puncta import ThresholdMode
+        
+        # Create a 64x64 image with a 6x6 pixel spot of intensity 10.0
+        img = np.zeros((64, 64), dtype=np.float32)
+        img[30:36, 30:36] = 10.0  # Area = 36 pixels
+        
+        detector = PunctaDetector()
+        
+        # 1. Pixel Mode: minimum_size = 40 pixels -> Area 36 spot should be filtered out
+        params = PunctaParameters(
+            sigma=1.5,
+            threshold_mode=ThresholdMode.ABSOLUTE,
+            absolute_threshold=1.0,
+            minimum_size=40,
+            maximum_size=100
+        )
+        res_pixel = detector.detect(img, params, calibration_mode="pixel")
+        self.assertEqual(len(res_pixel.object_ids), 0)
+        
+        # 2. Micron Mode: voxel_size = (0.5, 0.5, 1.0)
+        # pixel_area = 0.25 um^2
+        # Area = 36 pixels * 0.25 = 9.0 um^2
+        # If minimum_size = 8.0 um^2 (equivalent to 32 pixels), the spot should be detected!
+        params_micron = PunctaParameters(
+            sigma=0.75, # 0.75 microns / 0.5 = 1.5 pixels
+            threshold_mode=ThresholdMode.ABSOLUTE,
+            absolute_threshold=1.0,
+            minimum_size=8.0, # 8.0 um^2 / 0.25 = 32 pixels
+            maximum_size=25.0 # 25.0 um^2 / 0.25 = 100 pixels
+        )
+        res_micron = detector.detect(
+            img, 
+            params_micron, 
+            voxel_size=(0.5, 0.5, 1.0), 
+            calibration_mode="micron"
+        )
+        self.assertEqual(len(res_micron.object_ids), 1)
+        self.assertTrue(np.sum(res_micron.labels > 0) > 30)

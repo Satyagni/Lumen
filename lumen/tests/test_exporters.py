@@ -226,3 +226,52 @@ class TestFluorescenceExporters(unittest.TestCase):
         self.assertEqual(float(reloaded_row["Ch1_min"]), 1.0)
         self.assertEqual(float(reloaded_row["Ch1_max"]), 10.0)
         self.assertEqual(float(reloaded_row["Ch1_std_deviation"]), 2.5)
+
+    def test_micron_mode_export(self):
+        """Verifies cell-level and summary CSV exports in micron mode."""
+        quantifier_output = [
+            {
+                "cell_id": 1,
+                "area": 25.0,  # physical area (e.g. um2)
+                "perimeter": 15.2, # physical perimeter (e.g. um)
+                "GFP_mean": 10.0,
+                "GFP_median": 9.5,
+                "GFP_integrated_intensity": 250.0,
+                "GFP_min": 5.0,
+                "GFP_max": 15.0,
+                "GFP_std_deviation": 2.1
+            }
+        ]
+        
+        # 1. Test cell export in micron mode
+        cell_path = os.path.join(self.test_dir.name, "cells_micron.csv")
+        export_cell_csv(quantifier_output, cell_path, calibration_mode="micron")
+        
+        with open(cell_path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            headers = reader.fieldnames
+            rows = list(reader)
+            
+        self.assertEqual(headers[:3], ["cell_id", "area_um2", "perimeter_um"])
+        self.assertEqual(float(rows[0]["area_um2"]), 25.0)
+        self.assertEqual(float(rows[0]["perimeter_um"]), 15.2)
+
+        # 2. Test summary export in micron mode
+        summary_path = os.path.join(self.test_dir.name, "summary_micron.csv")
+        export_summary_csv(
+            image_filename="test_image.czi",
+            quantifier_output=quantifier_output,
+            preprocessing_settings={},
+            segmentation_settings={},
+            timestamp="2026-07-06 12:00:00",
+            file_path=summary_path,
+            calibration_mode="micron"
+        )
+        
+        with open(summary_path, "r", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+            
+        summary_dict = dict(rows)
+        self.assertIn("average_area_um2", summary_dict)
+        self.assertEqual(float(summary_dict["average_area_um2"]), 25.0)

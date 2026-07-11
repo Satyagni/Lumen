@@ -5,7 +5,7 @@ cell assignment, measurements, results structures, filters, and exporters.
 """
 
 from lumen.core.puncta.config import PunctaParameters, ThresholdMode
-from lumen.core.puncta.types import PunctaDetectionResult
+from lumen.core.puncta.types import PunctaDetectionResult, PunctaAssignmentResult
 from lumen.core.puncta.detector import PunctaDetector
 from lumen.core.puncta.assignment import PunctaAssigner
 from lumen.core.puncta.measurements import PunctaMeasurer
@@ -16,6 +16,7 @@ __all__ = [
     "PunctaParameters",
     "ThresholdMode",
     "PunctaDetectionResult",
+    "PunctaAssignmentResult",
     "PunctaDetector",
     "PunctaAssigner",
     "PunctaMeasurer",

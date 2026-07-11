@@ -43,7 +43,9 @@ def calculate_perimeter(mask: np.ndarray) -> float:
 def quantify_fluorescence(
     raw_channels: List[np.ndarray],
     masks: np.ndarray,
-    channel_names: List[str]
+    channel_names: List[str],
+    voxel_size: tuple = (1.0, 1.0, 1.0),
+    calibration_mode: str = "pixel"
 ) -> List[Dict[str, Any]]:
     """Quantifies fluorescence intensity metrics for each cell mask across multiple channels.
     
@@ -106,9 +108,17 @@ def quantify_fluorescence(
         cell_mask = (masks == label)
         
         # Calculate cell geometry metrics
-        area_val = int(np.sum(cell_mask))
+        area_val = float(np.sum(cell_mask))
         perimeter_val = calculate_perimeter(cell_mask)
         
+        if calibration_mode == "micron":
+            dx, dy = voxel_size[0], voxel_size[1]
+            area_val = float(area_val * dx * dy)
+            perimeter_val = float(perimeter_val * (dx + dy) / 2.0)
+        else:
+            area_val = int(area_val)
+            perimeter_val = float(perimeter_val)
+            
         cell_metrics = {
             "cell_id": int(label),
             "area": area_val,

@@ -37,6 +37,9 @@ class AnalysisSession:
         from lumen.core.puncta.config import PunctaParameters
         self.puncta_settings = PunctaParameters()
         
+        # Physical units calibration toggle (PR 5)
+        self.calibration_mode = "pixel"  # "pixel" | "micron"
+        
         # Preprocessing session attributes
         self.preprocess_auto_contrast = True
         self.preprocess_percentile_low = 1.0
@@ -202,6 +205,7 @@ class AppState(QObject):
     segmentation_channel_changed = Signal(int)
     active_viewer_channel_changed = Signal(int)
     background_correction_changed = Signal()
+    calibration_mode_changed = Signal(str)
 
     # Preprocessing Signals
     preprocessing_changed = Signal()
@@ -248,6 +252,7 @@ class AppState(QObject):
         self._fluorescence_summary = {}
         self._heatmap_cache = {}
         self._active_metric = "mean"
+        self._calibration_mode = "pixel"
 
         # Preprocessing State Caching
         self._preprocess_auto_contrast = True
@@ -672,6 +677,23 @@ class AppState(QObject):
             if session:
                 session.background_mode = val
         self.background_correction_changed.emit()
+
+    @property
+    def calibration_mode(self) -> str:
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                return getattr(session, "calibration_mode", "pixel")
+        return self._calibration_mode
+
+    @calibration_mode.setter
+    def calibration_mode(self, val: str):
+        self._calibration_mode = val
+        if self._current_image_path:
+            session = self.workspace_manager.get_analysis_session(self._current_image_path, self.workspace_manager._active_analysis_origin)
+            if session:
+                session.calibration_mode = val
+        self.calibration_mode_changed.emit(val)
 
     @property
     def background_params(self) -> dict:

@@ -554,16 +554,11 @@ class BatchProcessingManager(QObject):
             median_area = float(np.median(areas)) if areas else 0.0
             avg_diameter = float(np.mean(diameters)) if diameters else 0.0
             
-            import PIL.Image
-            import tifffile
-            ext = Path(image_path).suffix.lower()
-            if ext in [".tif", ".tiff"]:
-                with tifffile.TiffFile(image_path) as tif:
-                    shape = tif.series[0].shape
-            else:
-                with PIL.Image.open(image_path) as img:
-                    size = img.size
-                    shape = (size[1], size[0])
+            from lumen.core.imaging import ImageReaderFactory
+            reader = ImageReaderFactory.get_reader(image_path)
+            reader.open(image_path)
+            shape = reader.get_metadata().dimensions
+            reader.close()
             
             h, w = shape[:2]
             density = cell_count / (h * w) if h * w > 0 else 0.0

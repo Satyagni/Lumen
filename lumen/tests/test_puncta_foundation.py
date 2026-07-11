@@ -5,6 +5,7 @@ from lumen.core.puncta import (
     PunctaParameters,
     ThresholdMode,
     PunctaDetectionResult,
+    PunctaAssignmentResult,
     PunctaDetector,
     PunctaAssigner,
     PunctaMeasurer,
@@ -60,22 +61,34 @@ class TestPunctaFoundation(unittest.TestCase):
         self.assertEqual(res.object_ids.shape, (0,))
 
     def test_assigner_placeholder(self):
-        """Verifies assigner initialization and placeholder output."""
+        """Verifies assigner initialization and output mapping."""
         assigner = PunctaAssigner()
-        blobs = np.zeros((10, 10), dtype=np.int32)
-        cell_masks = np.zeros((10, 10), dtype=np.int32)
-        mapping = assigner.assign_to_cells(blobs, cell_masks)
-        self.assertEqual(mapping, {})
+        cell_labels = np.zeros((10, 10), dtype=np.int32)
+        detection = PunctaDetectionResult(
+            labels=np.zeros((10, 10), dtype=np.int32),
+            object_ids=np.empty((0,), dtype=np.int32)
+        )
+        res = assigner.assign(cell_labels, detection)
+        self.assertEqual(res.cell_to_puncta, {})
+        self.assertEqual(res.punctum_to_cell, {})
+        self.assertEqual(res.unassigned_puncta, [])
 
     def test_measurer_placeholder(self):
-        """Verifies measurer initialization and placeholder output."""
+        """Verifies measurer initialization and output results."""
         measurer = PunctaMeasurer()
         image = np.ones((10, 10), dtype=np.float32)
-        assigned = {}
-        detection_result = None
-        cell_masks = np.zeros((10, 10), dtype=np.int32)
+        detection = PunctaDetectionResult(
+            labels=np.zeros((10, 10), dtype=np.int32),
+            object_ids=np.empty((0,), dtype=np.int32)
+        )
+        assignment = PunctaAssignmentResult(
+            cell_to_puncta={},
+            punctum_to_cell={},
+            unassigned_puncta=[]
+        )
+        cell_labels = np.zeros((10, 10), dtype=np.int32)
         
-        res = measurer.measure(image, assigned, detection_result, cell_masks)
+        res = measurer.measure(image, detection, assignment, cell_labels)
         self.assertIsInstance(res, PunctaResults)
         self.assertEqual(len(res.puncta_list), 0)
         self.assertEqual(len(res.per_cell_summary), 0)

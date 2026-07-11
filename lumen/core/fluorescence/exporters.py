@@ -20,9 +20,10 @@ def infer_channels_from_output(quantifier_output: List[Dict[str, Any]]) -> List[
 def export_cell_csv(
     quantifier_output: List[Dict[str, Any]],
     file_path: str,
-    fallback_channel_names: Optional[List[str]] = None
+    fallback_channel_names: Optional[List[str]] = None,
+    calibration_mode: str = "pixel"
 ) -> None:
-    """Exports per-cell metrics to a CSV file in a flattened, tabular format.
+    """Exports per-cell metrics to a CSV file in a tabular format.
     
     Headers are output in a stable deterministic order:
     cell_id, area, perimeter, followed by all metrics for each channel in the original channel order.
@@ -31,6 +32,7 @@ def export_cell_csv(
         quantifier_output: List of dictionaries containing per-cell metrics.
         file_path: Destination file path for the CSV.
         fallback_channel_names: Channel names to use if the quantifier output is empty.
+        calibration_mode: "pixel" or "micron" toggle.
     """
     # Infer channels, falling back if empty
     channels = infer_channels_from_output(quantifier_output)
@@ -38,7 +40,10 @@ def export_cell_csv(
         channels = fallback_channel_names
         
     # Build deterministic headers list
-    headers = ["cell_id", "area", "perimeter"]
+    area_header = "area_um2" if calibration_mode == "micron" else "area"
+    perimeter_header = "perimeter_um" if calibration_mode == "micron" else "perimeter"
+    headers = ["cell_id", area_header, perimeter_header]
+    
     metrics = ["mean", "median", "integrated_intensity", "min", "max", "std_deviation"]
     for ch in channels:
         for metric in metrics:
@@ -49,7 +54,14 @@ def export_cell_csv(
         writer = csv.writer(f)
         writer.writerow(headers)
         for row in quantifier_output:
-            csv_row = [row.get(h, "") for h in headers]
+            csv_row = []
+            for h in headers:
+                if h == "area_um2":
+                    csv_row.append(row.get("area", ""))
+                elif h == "perimeter_um":
+                    csv_row.append(row.get("perimeter", ""))
+                else:
+                    csv_row.append(row.get(h, ""))
             writer.writerow(csv_row)
 
 
@@ -60,7 +72,8 @@ def export_summary_csv(
     segmentation_settings: Dict[str, Any],
     timestamp: str,
     file_path: str,
-    fallback_channel_names: Optional[List[str]] = None
+    fallback_channel_names: Optional[List[str]] = None,
+    calibration_mode: str = "pixel"
 ) -> None:
     """Exports image-level summary metrics to a key-value style CSV file.
     
@@ -72,6 +85,7 @@ def export_summary_csv(
         timestamp: Time when the analysis was executed.
         file_path: Destination file path for the CSV.
         fallback_channel_names: Channel names to use if the quantifier output is empty.
+        calibration_mode: "pixel" or "micron" toggle.
     """
     # Infer channels, falling back if empty
     channels = infer_channels_from_output(quantifier_output)
@@ -85,12 +99,14 @@ def export_summary_csv(
     else:
         average_area = 0.0
         
+    area_header = "average_area_um2" if calibration_mode == "micron" else "average_area"
+    
     # Build deterministic list of key-value tuples
     rows = [
         ("image_filename", image_filename),
         ("timestamp", timestamp),
         ("total_cell_count", total_cell_count),
-        ("average_area", average_area)
+        (area_header, average_area)
     ]
     
     for ch in channels:

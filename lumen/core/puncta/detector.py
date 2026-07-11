@@ -38,7 +38,7 @@ class PunctaDetector:
         """
         self.parameters = parameters
 
-    def detect(self, image: np.ndarray, parameters: PunctaParameters) -> PunctaDetectionResult:
+    def detect(self, image: np.ndarray, parameters: PunctaParameters, voxel_size: tuple = (1.0, 1.0, 1.0), calibration_mode: str = "pixel") -> PunctaDetectionResult:
         """Detects puncta spots on a single channel raw image.
         
         This method executes a pure, side-effect-free pipeline:
@@ -86,15 +86,29 @@ class PunctaDetector:
         # 2. Precision conversion
         img_float = image.astype(np.float32, copy=False)
 
-        # 3. Difference of Gaussians
-        sigma1 = parameters.sigma
-        sigma2 = parameters.sigma * parameters.dog_sigma_ratio
+        # 3. Calibration conversion (PR 5)
+        dx, dy = voxel_size[0], voxel_size[1]
+        pixel_spacing = (dx + dy) / 2.0
+        pixel_area = dx * dy
+
+        if calibration_mode == "micron":
+            scaled_sigma = parameters.sigma / pixel_spacing
+            scaled_min_size = max(1.0, parameters.minimum_size / pixel_area)
+            scaled_max_size = max(scaled_min_size, parameters.maximum_size / pixel_area)
+        else:
+            scaled_sigma = parameters.sigma
+            scaled_min_size = parameters.minimum_size
+            scaled_max_size = parameters.maximum_size
+
+        # 4. Difference of Gaussians
+        sigma1 = scaled_sigma
+        sigma2 = scaled_sigma * parameters.dog_sigma_ratio
         
         blur1 = ndimage.gaussian_filter(img_float, sigma=sigma1)
         blur2 = ndimage.gaussian_filter(img_float, sigma=sigma2)
         dog = blur1 - blur2
 
-        # 4. Thresholding
+        # 5. Thresholding
         if parameters.threshold_mode == ThresholdMode.ADAPTIVE:
             dog_mean = float(np.mean(dog))
             dog_std = float(np.std(dog))
@@ -104,7 +118,7 @@ class PunctaDetector:
             
         binary_mask = dog > threshold
 
-        # 5. Connected Component Labeling (8-connectivity)
+        # 6. Connected Component Labeling (8-connectivity)
         # Using a fully connected 3x3 structuring element of all ones
         structure = np.ones((3, 3), dtype=bool)
         labeled, num_features = ndimage.label(binary_mask, structure=structure)
@@ -115,9 +129,9 @@ class PunctaDetector:
                 object_ids=np.empty((0,), dtype=np.int32)
             )
 
-        # 6. Size Filtering (vectorized)
+        # 7. Size Filtering (vectorized)
         sizes = np.bincount(labeled.ravel())
-        valid_mask = (sizes >= parameters.minimum_size) & (sizes <= parameters.maximum_size)
+        valid_mask = (sizes >= scaled_min_size) & (sizes <= scaled_max_size)
         valid_mask[0] = False  # Exclude background label
         
         valid_labels = np.where(valid_mask)[0]

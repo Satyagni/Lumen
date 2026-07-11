@@ -7,6 +7,14 @@ from lumen.workflows.state import state
 from lumen.processing.image_manager import image_manager
 from lumen.core.logger import logger
 
+class FocusWheelSlider(QSlider):
+    """QSlider subclass that only consumes mouse wheel events when focused."""
+    def wheelEvent(self, e):
+        if self.hasFocus():
+            super().wheelEvent(e)
+        else:
+            e.ignore()
+
 class PreprocessingPanel(QWidget):
     """Surgical interface card implementing modular non-destructive preprocessing controls."""
 
@@ -41,7 +49,7 @@ class PreprocessingPanel(QWidget):
         # 2. Percentile Low Slider
         self.p_low_lbl = QLabel("Low Cutoff:")
         self.p_low_lbl.setStyleSheet("font-size: 11px; color: #9EA4B0;")
-        self.p_low_slider = QSlider(Qt.Horizontal)
+        self.p_low_slider = FocusWheelSlider(Qt.Horizontal)
         self.p_low_slider.setRange(0, 100)  # Represents 0.0% to 10.0% (val / 10.0)
         self.p_low_val_lbl = QLabel("1.0%")
         self.p_low_val_lbl.setStyleSheet("font-size: 11px; color: #34D399; font-weight: 600; min-width: 40px; qproperty-alignment: AlignRight;")
@@ -52,7 +60,7 @@ class PreprocessingPanel(QWidget):
         # 3. Percentile High Slider
         self.p_high_lbl = QLabel("High Cutoff:")
         self.p_high_lbl.setStyleSheet("font-size: 11px; color: #9EA4B0;")
-        self.p_high_slider = QSlider(Qt.Horizontal)
+        self.p_high_slider = FocusWheelSlider(Qt.Horizontal)
         self.p_high_slider.setRange(900, 1000)  # Represents 90.0% to 100.0% (val / 10.0)
         self.p_high_val_lbl = QLabel("99.0%")
         self.p_high_val_lbl.setStyleSheet("font-size: 11px; color: #34D399; font-weight: 600; min-width: 40px; qproperty-alignment: AlignRight;")
@@ -63,7 +71,7 @@ class PreprocessingPanel(QWidget):
         # 4. Brightness Slider
         self.brightness_lbl = QLabel("Brightness:")
         self.brightness_lbl.setStyleSheet("font-size: 11px; color: #9EA4B0;")
-        self.brightness_slider = QSlider(Qt.Horizontal)
+        self.brightness_slider = FocusWheelSlider(Qt.Horizontal)
         self.brightness_slider.setRange(-100, 100)  # Represents -1.0 to 1.0
         self.brightness_val_lbl = QLabel("0.00")
         self.brightness_val_lbl.setStyleSheet("font-size: 11px; color: #60A5FA; font-weight: 600; min-width: 40px; qproperty-alignment: AlignRight;")
@@ -74,7 +82,7 @@ class PreprocessingPanel(QWidget):
         # 5. Contrast Slider
         self.contrast_lbl = QLabel("Contrast:")
         self.contrast_lbl.setStyleSheet("font-size: 11px; color: #9EA4B0;")
-        self.contrast_slider = QSlider(Qt.Horizontal)
+        self.contrast_slider = FocusWheelSlider(Qt.Horizontal)
         self.contrast_slider.setRange(10, 300)  # Represents 0.1 to 3.0 (val / 100.0)
         self.contrast_val_lbl = QLabel("1.00")
         self.contrast_val_lbl.setStyleSheet("font-size: 11px; color: #F59E0B; font-weight: 600; min-width: 40px; qproperty-alignment: AlignRight;")
@@ -85,7 +93,7 @@ class PreprocessingPanel(QWidget):
         # 6. Gamma Slider
         self.gamma_lbl = QLabel("Gamma:")
         self.gamma_lbl.setStyleSheet("font-size: 11px; color: #9EA4B0;")
-        self.gamma_slider = QSlider(Qt.Horizontal)
+        self.gamma_slider = FocusWheelSlider(Qt.Horizontal)
         self.gamma_slider.setRange(10, 300)  # Represents 0.1 to 3.0 (val / 100.0)
         self.gamma_val_lbl = QLabel("1.00")
         self.gamma_val_lbl.setStyleSheet("font-size: 11px; color: #A78BFA; font-weight: 600; min-width: 40px; qproperty-alignment: AlignRight;")

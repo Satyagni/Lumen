@@ -1,0 +1,1279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280">
+<title>Lumen &amp; Atlas-Lab · Engineering Portfolio</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Space+Grotesk:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+
+*, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+
+:root {
+  --void: #04040a;
+  --deep: #080812;
+  --layer: #0c0c1e;
+  --surface: #10102a;
+  --card: #13132e;
+  --card2: #1a1a38;
+  --border: rgba(139,92,246,0.15);
+  --border2: rgba(139,92,246,0.3);
+  --v: #8b5cf6;
+  --v2: #a78bfa;
+  --v3: #c4b5fd;
+  --em: #06d6a0;
+  --em2: #34d399;
+  --sky: #38bdf8;
+  --sky2: #7dd3fc;
+  --fire: #f59e0b;
+  --fire2: #fbbf24;
+  --rose: #f43f5e;
+  --rose2: #fb7185;
+  --t1: #f8fafc;
+  --t2: #94a3b8;
+  --t3: #475569;
+  --t4: #1e293b;
+}
+
+html, body { width:100%; height:100%; overflow:hidden; background:var(--void); }
+
+body { font-family:'Space Grotesk',sans-serif; color:var(--t1); }
+
+#cursor-glow {
+  position:fixed; width:400px; height:400px;
+  border-radius:50%;
+  background:radial-gradient(circle, rgba(139,92,246,0.08) 0%, transparent 70%);
+  pointer-events:none; z-index:0;
+  transform:translate(-50%,-50%);
+  transition:transform 0.1s linear;
+}
+
+#starfield { position:fixed; inset:0; pointer-events:none; z-index:0; overflow:hidden; }
+.star { position:absolute; border-radius:50%; background:white; animation:twinkle var(--d) ease-in-out infinite; }
+@keyframes twinkle { 0%,100% { opacity:var(--min-op); transform:scale(1); } 50% { opacity:var(--max-op); transform:scale(1.4); } }
+
+#prog {
+  position:fixed; top:0; left:0; height:2px; z-index:1000;
+  background:linear-gradient(90deg,var(--v),var(--sky),var(--em));
+  box-shadow:0 0 16px var(--v);
+  transition:width 0.6s cubic-bezier(0.22,1,0.36,1);
+}
+
+#chip {
+  position:fixed; top:20px; right:24px; z-index:999;
+  background:rgba(139,92,246,0.12);
+  border:1px solid var(--border2);
+  border-radius:100px;
+  padding:6px 16px;
+  font-family:'Space Mono',monospace;
+  font-size:11px; color:var(--v3);
+  backdrop-filter:blur(12px);
+  letter-spacing:0.08em;
+}
+
+#datechip {
+  position:fixed; top:20px; left:24px; z-index:999;
+  background:rgba(6,214,160,0.08);
+  border:1px solid rgba(6,214,160,0.2);
+  border-radius:100px;
+  padding:6px 16px;
+  font-size:10px; color:var(--em2);
+  backdrop-filter:blur(12px);
+  letter-spacing:0.1em;
+  font-weight:600; text-transform:uppercase;
+}
+
+#nav-rail {
+  position:fixed; right:16px; top:50%; transform:translateY(-50%);
+  z-index:999; display:flex; flex-direction:column; gap:6px; align-items:center;
+}
+.pip { width:5px; height:5px; border-radius:50%; background:var(--t3); cursor:pointer; transition:all 0.35s cubic-bezier(0.34,1.56,0.64,1); border:1px solid transparent; }
+.pip:hover { background:var(--v2); transform:scale(1.6); }
+.pip.on { background:var(--v); height:18px; border-radius:3px; width:5px; box-shadow:0 0 10px var(--v); border-color:var(--v2); }
+.pip.section-end { margin-bottom:8px; }
+
+#arrows {
+  position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
+  z-index:999; display:flex; align-items:center; gap:8px;
+  background:rgba(8,8,18,0.7); backdrop-filter:blur(20px);
+  border:1px solid var(--border); border-radius:100px;
+  padding:8px 20px;
+}
+#arrows button { background:none; border:none; color:var(--t2); cursor:pointer; font-size:14px; padding:4px 12px; border-radius:100px; font-family:'Space Grotesk',sans-serif; font-weight:500; transition:all 0.2s; }
+#arrows button:hover { color:var(--t1); background:rgba(139,92,246,0.15); }
+#arrows .sep { color:var(--t3); font-size:11px; letter-spacing:0.1em; min-width:52px; text-align:center; }
+
+#deck { position:relative; width:100vw; height:100vh; overflow:hidden; }
+
+.slide { position:absolute; inset:0; padding:64px 72px 56px; display:flex; flex-direction:column; opacity:0; pointer-events:none; will-change:transform,opacity,filter; z-index:1; }
+.slide.active { opacity:1; pointer-events:all; z-index:2; }
+
+.slide.go-next { animation: slideNextIn 0.45s cubic-bezier(0.25,1,0.5,1) forwards; will-change: transform, opacity, filter; }
+.slide.go-prev { animation: slidePrevIn 0.45s cubic-bezier(0.25,1,0.5,1) forwards; will-change: transform, opacity, filter; }
+.slide.leave-next { animation: slideNextOut 0.35s cubic-bezier(0.25,1,0.5,1) forwards; pointer-events:none; will-change: transform, opacity, filter; }
+.slide.leave-prev { animation: slidePrevOut 0.35s cubic-bezier(0.25,1,0.5,1) forwards; pointer-events:none; will-change: transform, opacity, filter; }
+
+@keyframes slideNextIn { from { opacity:0; transform:translate3d(40px,0,0) scale(0.98); filter:blur(4px); } to { opacity:1; transform:translate3d(0,0,0) scale(1); filter:blur(0); } }
+@keyframes slidePrevIn { from { opacity:0; transform:translate3d(-40px,0,0) scale(0.98); filter:blur(4px); } to { opacity:1; transform:translate3d(0,0,0) scale(1); filter:blur(0); } }
+@keyframes slideNextOut { from { opacity:1; transform:translate3d(0,0,0) scale(1); filter:blur(0); } to { opacity:0; transform:translate3d(-40px,0,0) scale(0.98); filter:blur(4px); } }
+@keyframes slidePrevOut { from { opacity:1; transform:translate3d(0,0,0) scale(1); filter:blur(0); } to { opacity:0; transform:translate3d(40px,0,0) scale(0.98); filter:blur(4px); } }
+
+@keyframes up { from{opacity:0;transform:translate3d(0,16px,0)} to{opacity:1;transform:translate3d(0,0,0)} }
+@keyframes dn { from{opacity:0;transform:translate3d(0,-12px,0)} to{opacity:1;transform:translate3d(0,0,0)} }
+@keyframes zin { from{opacity:0;transform:scale3d(0.92,0.92,1)} to{opacity:1;transform:scale3d(1,1,1)} }
+@keyframes lft { from{opacity:0;transform:translate3d(-20px,0,0)} to{opacity:1;transform:translate3d(0,0,0)} }
+@keyframes rgt { from{opacity:0;transform:translate3d(20px,0,0)} to{opacity:1;transform:translate3d(0,0,0)} }
+
+.slide.active .u1  { animation:up 0.35s 0.02s ease both; will-change: transform, opacity; }
+.slide.active .u2  { animation:up 0.35s 0.08s ease both; will-change: transform, opacity; }
+.slide.active .u3  { animation:up 0.35s 0.14s ease both; will-change: transform, opacity; }
+.slide.active .u4  { animation:up 0.35s 0.20s ease both; will-change: transform, opacity; }
+.slide.active .u5  { animation:up 0.35s 0.26s ease both; will-change: transform, opacity; }
+.slide.active .u6  { animation:up 0.35s 0.32s ease both; will-change: transform, opacity; }
+.slide.active .u7  { animation:up 0.35s 0.38s ease both; will-change: transform, opacity; }
+.slide.active .u8  { animation:up 0.35s 0.44s ease both; will-change: transform, opacity; }
+.slide.active .z1  { animation:zin 0.45s 0.04s ease both; will-change: transform, opacity; }
+.slide.active .z2  { animation:zin 0.45s 0.12s ease both; will-change: transform, opacity; }
+.slide.active .z3  { animation:zin 0.45s 0.20s ease both; will-change: transform, opacity; }
+.slide.active .l1  { animation:lft 0.35s 0.08s ease both; will-change: transform, opacity; }
+.slide.active .l2  { animation:lft 0.35s 0.16s ease both; will-change: transform, opacity; }
+.slide.active .r1  { animation:rgt 0.35s 0.08s ease both; will-change: transform, opacity; }
+.slide.active .r2  { animation:rgt 0.35s 0.16s ease both; will-change: transform, opacity; }
+
+@keyframes pulseGlow { 0%,100% { text-shadow:0 0 40px rgba(139,92,246,0.4),0 0 80px rgba(139,92,246,0.15); } 50% { text-shadow:0 0 60px rgba(139,92,246,0.7),0 0 120px rgba(139,92,246,0.3); } }
+@keyframes orb { 0%,100% { transform:translate(0,0) scale(1); } 33% { transform:translate(30px,-20px) scale(1.05); } 66% { transform:translate(-20px,20px) scale(0.96); } }
+@keyframes borderPulse { 0%,100% { border-color:rgba(139,92,246,0.2); } 50% { border-color:rgba(139,92,246,0.5); } }
+@keyframes pulseD { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(0.75)} }
+@keyframes arrowPulse { 0%,100%{transform:translateX(0);opacity:0.6} 50%{transform:translateX(4px);opacity:1} }
+
+.orb { position:absolute; border-radius:50%; pointer-events:none; filter:blur(80px); animation:orb var(--t,10s) ease-in-out infinite; }
+
+.eyebrow { font-size:12px; font-weight:700; letter-spacing:0.2em; text-transform:uppercase; color:var(--v2); display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+.eyebrow::before { content:''; width:28px; height:1px; background:var(--v2); flex-shrink:0; }
+.eyebrow.em { color:var(--em2); } .eyebrow.em::before { background:var(--em2); }
+
+.h1 { font-family:'Syne',sans-serif; font-size:clamp(36px,4.5vw,58px); font-weight:800; line-height:1.05; letter-spacing:-0.025em; margin-bottom:8px; }
+.h2 { font-family:'Syne',sans-serif; font-size:clamp(24px,3.0vw,38px); font-weight:700; line-height:1.1; }
+.sub { font-size:clamp(16px,1.5vw,20px); color:var(--t2); font-weight:400; line-height:1.65; margin-bottom:28px; }
+
+.gv  { background:linear-gradient(130deg,var(--v2),var(--sky)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
+.gem { background:linear-gradient(130deg,var(--em),var(--sky2)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
+.gf  { background:linear-gradient(130deg,var(--fire),var(--rose)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
+.gw  { background:linear-gradient(130deg,#fff,var(--v3)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
+
+.card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:20px; position:relative; overflow:hidden; transition:border-color 0.3s, transform 0.3s, box-shadow 0.3s; animation:borderPulse 4s ease infinite; }
+.card:hover { border-color:var(--border2); transform:translateY(-3px); box-shadow:0 16px 48px rgba(139,92,246,0.12); animation:none; }
+.card::before { content:''; position:absolute; inset:0; background:linear-gradient(135deg,rgba(139,92,246,0.04) 0%,transparent 50%); pointer-events:none; }
+
+.card-v  { border-color:rgba(139,92,246,0.25); background:rgba(139,92,246,0.06); }
+.card-em { border-color:rgba(6,214,160,0.25); background:rgba(6,214,160,0.05); }
+.card-sky{ border-color:rgba(56,189,248,0.25); background:rgba(56,189,248,0.05); }
+.card-fire{ border-color:rgba(245,158,11,0.25); background:rgba(245,158,11,0.05); }
+.card-rose{ border-color:rgba(244,63,94,0.25); background:rgba(244,63,94,0.05); }
+
+.card-head { font-size:16px; font-weight:700; margin-bottom:10px; }
+.card-body { font-size:14px; color:var(--t2); line-height:1.7; }
+
+.tag { display:inline-flex; align-items:center; gap:6px; padding:5px 14px; border-radius:100px; font-size:12px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; flex-shrink:0; }
+.tag-v   { background:rgba(139,92,246,0.15); color:var(--v3);  border:1px solid rgba(139,92,246,0.3); }
+.tag-em  { background:rgba(6,214,160,0.12);  color:var(--em2); border:1px solid rgba(6,214,160,0.25); }
+.tag-sky { background:rgba(56,189,248,0.12); color:var(--sky2);border:1px solid rgba(56,189,248,0.25); }
+.tag-fire{ background:rgba(245,158,11,0.12); color:var(--fire2);border:1px solid rgba(245,158,11,0.25); }
+.tag-rose{ background:rgba(244,63,94,0.12);  color:var(--rose2);border:1px solid rgba(244,63,94,0.25); }
+
+.mono { font-family:'Space Mono',monospace; font-size:13px; color:var(--v3); background:rgba(139,92,246,0.1); padding:2px 7px; border-radius:5px; }
+
+.frame { border-radius:14px; overflow:hidden; border:1px solid rgba(139,92,246,0.25); box-shadow:0 24px 64px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.04), inset 0 1px 0 rgba(255,255,255,0.05); position:relative; }
+.frame-bar { background:#0e0e22; padding:8px 12px; display:flex; align-items:center; gap:6px; border-bottom:1px solid rgba(139,92,246,0.15); }
+.dot-r { width:10px;height:10px;border-radius:50%;background:#ff5f57; }
+.dot-y { width:10px;height:10px;border-radius:50%;background:#ffbd2e; }
+.dot-g { width:10px;height:10px;border-radius:50%;background:#28c840; }
+.frame-title { font-family:'Space Mono',monospace; font-size:9px; color:var(--t3); margin-left:8px; }
+.frame img { width:100%; display:block; }
+
+.pipe-wrap { display:flex; align-items:stretch; gap:0; flex-wrap:wrap; }
+.pipe-node { flex:1; min-width:120px; background:var(--card); border:1px solid var(--border); border-radius:16px; padding:16px 14px; position:relative; }
+.pipe-arrow { width:24px; display:flex; align-items:center; justify-content:center; color:var(--v2); font-size:16px; flex-shrink:0; animation:arrowPulse 2s ease-in-out infinite; }
+
+.stat { text-align:center; }
+.stat-n { font-family:'Syne',sans-serif; font-size:clamp(40px,5.5vw,64px); font-weight:900; line-height:1; }
+.stat-l { font-size:12px; color:var(--t2); margin-top:4px; font-weight:600; letter-spacing:0.07em; text-transform:uppercase; }
+
+.tl-line { position:absolute; left:18px; top:0; bottom:0; width:1px; background:linear-gradient(to bottom, var(--v),var(--sky),var(--em),var(--fire),var(--rose)); }
+.tl-item { position:relative; padding-left:48px; margin-bottom:16px; }
+.tl-dot { position:absolute; left:10px; top:4px; width:16px; height:16px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:8px; font-weight:700; z-index:1; }
+
+.mod-row { display:flex; align-items:center; gap:12px; padding:9px 14px; border-radius:10px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.05); margin-bottom:6px; transition:all 0.2s; }
+.mod-row:hover { background:rgba(139,92,246,0.06); border-color:var(--border); }
+.mod-name { font-family:'Space Mono',monospace; font-size:10px; color:var(--v3); min-width:130px; }
+.mod-desc { font-size:11px; color:var(--t2); flex:1; line-height:1.5; }
+
+.cmp { border-radius:14px; overflow:hidden; border:1px solid var(--border); }
+.cmp-head { display:grid; grid-template-columns:2fr 1fr 1fr 1fr; background:rgba(139,92,246,0.1); padding:10px 16px; }
+.cmp-head span { font-size:11px; font-weight:700; color:var(--t2); letter-spacing:0.05em; text-transform:uppercase; text-align:center; }
+.cmp-head span:first-child { text-align:left; }
+.cmp-row { display:grid; grid-template-columns:2fr 1fr 1fr 1fr; padding:9px 16px; border-top:1px solid rgba(255,255,255,0.04); font-size:12px; align-items:center; }
+.cmp-row:hover { background:rgba(139,92,246,0.04); }
+.cmp-row span:not(:first-child) { text-align:center; }
+.ck { color:var(--em2); font-size:14px; }
+.cx { color:var(--t3); font-size:14px; }
+.cp { color:var(--fire2); font-size:14px; }
+
+.rmc { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:16px 14px; position:relative; overflow:hidden; }
+.rmc::before { content:''; position:absolute; top:0;left:0;right:0;height:2px; }
+.rmc-v::before   { background:linear-gradient(90deg,var(--v),var(--v2)); }
+.rmc-sky::before { background:linear-gradient(90deg,var(--sky),var(--sky2)); }
+.rmc-em::before  { background:linear-gradient(90deg,var(--em),var(--em2)); }
+.rmc-fire::before{ background:linear-gradient(90deg,var(--fire),var(--fire2)); }
+.rmc-rose::before{ background:linear-gradient(90deg,var(--rose),var(--rose2)); }
+
+.formula { background:rgba(56,189,248,0.06); border:1px solid rgba(56,189,248,0.2); border-radius:10px; padding:10px 14px; font-family:'Space Mono',monospace; font-size:13px; color:var(--sky2); line-height:1.7; }
+
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;}
+.g4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;}
+.g23{display:grid;grid-template-columns:1.4fr 1fr;gap:20px;}
+.g32{display:grid;grid-template-columns:1fr 1.4fr;gap:20px;}
+.g5{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;}
+
+/* ── divider slide ── */
+.divider-num { font-family:'Space Mono',monospace; font-size:16px; color:var(--t3); letter-spacing:0.3em; margin-bottom:18px; }
+.divider-title { font-family:'Syne',sans-serif; font-size:clamp(64px,9vw,120px); font-weight:900; line-height:0.92; letter-spacing:-0.03em; }
+.divider-rule { width:80px; height:2px; margin:22px 0; }
+
+/* ── ER schema box ── */
+.schema-box { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:14px 16px; font-family:'Space Mono',monospace; font-size:13px; color:var(--v3); line-height:1.85; }
+.schema-title { font-size:13px; font-weight:700; color:var(--t1); letter-spacing:0.05em; margin-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:6px; }
+.schema-pk { color:var(--em2); } .schema-fk { color:var(--sky2); }
+</style>
+</head>
+<body>
+
+<div id="cursor-glow"></div>
+<div id="starfield"></div>
+<div id="prog"></div>
+<div id="chip">01 / 25</div>
+<div id="datechip">Engineering Portfolio · 2026</div>
+<div id="nav-rail"></div>
+
+<div id="deck">
+<div class="slide active" id="s0">
+
+  <div class="orb" style="width:600px;height:600px;background:radial-gradient(circle,rgba(139,92,246,0.22),transparent);top:-200px;right:-100px;--t:12s"></div>
+  <div class="orb" style="width:400px;height:400px;background:radial-gradient(circle,rgba(56,189,248,0.14),transparent);bottom:-80px;left:-80px;--t:9s;animation-delay:-4s"></div>
+  <div class="orb" style="width:280px;height:280px;background:radial-gradient(circle,rgba(6,214,160,0.1),transparent);top:30%;left:38%;--t:14s;animation-delay:-7s"></div>
+
+  <div style="flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;position:relative;z-index:1">
+    <div class="u1" style="margin-bottom:22px">
+      <span class="tag tag-em" style="font-size:11px;padding:6px 16px">
+        <span style="width:7px;height:7px;border-radius:50%;background:var(--em);display:inline-block;animation:pulseD 2s infinite"></span>
+        Two Systems &middot; Both Shipped
+      </span>
+    </div>
+
+    <div class="z1" style="font-family:'Syne',sans-serif;font-size:clamp(36px,5.5vw,72px);font-weight:900;line-height:1.02;letter-spacing:-0.03em;max-width:1150px;margin-bottom:12px;animation:pulseGlow 4s ease-in-out infinite">
+      <span class="gv">ADVANCED BIO-COMPUTATIONAL SYSTEMS</span>
+    </div>
+
+    <div class="u2" style="font-family:'Space Grotesk',sans-serif;font-size:clamp(16px,2.2vw,28px);font-weight:700;color:var(--sky);letter-spacing:0.06em;text-transform:uppercase;max-width:1050px;line-height:1.2;margin-bottom:20px">
+      LOCAL BIO-IMAGE INFORMATICS &amp; HYBRID SEMANTIC RETRIEVAL ENGINES
+    </div>
+
+    <div class="u3" style="font-size:clamp(15px,1.5vw,19px);color:var(--t2);max-width:850px;line-height:1.65;font-weight:400;margin-bottom:28px">
+      Featuring <strong style="color:var(--t1)">Lumen</strong>, a local deep-learning cell segmentation platform, and <strong style="color:var(--t1)">Atlas-Lab</strong>, a hybrid search and deterministic biomedical knowledge graph engine.
+    </div>
+
+    <div class="u4" style="margin-top:26px;display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+      <span class="tag tag-v">Deep Learning Segmentation</span>
+      <span class="tag tag-sky">Hybrid Semantic Search</span>
+      <span class="tag tag-em">Local-First</span>
+      <span class="tag tag-fire">Knowledge Graphs</span>
+      <span class="tag tag-rose">Production-Validated</span>
+    </div>
+
+    <div class="u5" style="margin-top:36px;display:flex;gap:44px;justify-content:center;flex-wrap:wrap">
+      <div class="stat"><div class="stat-n gv">74</div><div class="stat-l">cells / image</div></div>
+      <div class="stat"><div class="stat-n gem">4.74ms</div><div class="stat-l">P50 graph lookup</div></div>
+      <div class="stat"><div class="stat-n gf">200+</div><div class="stat-l">images batch-validated</div></div>
+      <div class="stat"><div class="stat-n gw">2</div><div class="stat-l">full-stack platforms</div></div>
+    </div>
+
+    <div class="u6" style="margin-top:30px;font-size:11px;color:var(--t3);letter-spacing:0.1em;text-transform:uppercase">Project 01 &middot; Lumen &nbsp;&nbsp;|&nbsp;&nbsp; Project 02 &middot; Atlas-Lab</div>
+  </div>
+
+</div>
+
+<div class="slide" id="s1">
+
+  <div class="orb" style="width:700px;height:700px;background:radial-gradient(circle,rgba(139,92,246,0.22),transparent);top:-220px;left:-150px;--t:14s"></div>
+  <div style="flex:1;display:flex;flex-direction:column;justify-content:center;position:relative;z-index:1">
+    <div class="divider-num u1">PROJECT&nbsp;01 &nbsp;/&nbsp;02</div>
+    <div class="divider-title u2 gv">Lumen</div>
+    <div class="divider-rule u3" style="background:linear-gradient(90deg,var(--v),var(--sky))"></div>
+    <div class="u4" style="font-size:clamp(15px,1.7vw,21px);color:var(--t2);max-width:640px;line-height:1.65">
+      AI-powered biological image analysis ,  from raw microscopy TIFFs &amp; Zeiss CZI files to publication-ready quantification, entirely on your own workstation.
+    </div>
+    <div class="u5" style="margin-top:26px;display:flex;gap:10px;flex-wrap:wrap">
+      <span class="tag tag-v">Cellpose CNN</span>
+      <span class="tag tag-sky">CUDA &middot; CPU</span>
+      <span class="tag tag-em">Qt6 Desktop</span>
+      <span class="tag tag-fire">CZI Native</span>
+      <span class="tag tag-rose">DoG Puncta Engine</span>
+    </div>
+  </div>
+
+</div>
+
+<div class="slide" id="s2">
+
+  <div class="orb" style="width:500px;height:500px;background:radial-gradient(circle,rgba(244,63,94,0.1),transparent);top:-150px;right:0;--t:10s"></div>
+  <div class="eyebrow u1">The Problem Space</div>
+  <div class="h1 u2">Biology is drowning<br>in <span class="gf">unanalyzed images</span></div>
+  <div class="sub u3" style="max-width:700px">Modern labs generate terabytes of microscopy data per week. The bottleneck is never acquisition ,  it's quantification. Every existing tool forces a brutal tradeoff.</div>
+
+  <div class="g3 u4" style="flex:1;margin-bottom:0">
+    <div class="card card-fire" style="display:flex;flex-direction:column;gap:10px">
+      <div style="font-size:28px">&#9881;&#65039;</div>
+      <div class="tag tag-fire" style="align-self:start">ImageJ / Fiji</div>
+      <div class="card-head" style="font-size:16px;color:var(--fire2)">Manual &amp; Brittle</div>
+      <div class="card-body">Watershed segmentation suffers <em>marker explosion</em> in dense fields and <em>marker starvation</em> in sparse ones. Every new dataset demands expert macro re-tuning from scratch.</div>
+      <div style="margin-top:auto;font-size:11px;color:var(--t3)">Est. 2-4h setup per imaging session</div>
+    </div>
+    <div class="card card-rose" style="display:flex;flex-direction:column;gap:10px">
+      <div style="font-size:28px">&#129518;</div>
+      <div class="tag tag-rose" style="align-self:start">Classical CV</div>
+      <div class="card-head" style="font-size:16px;color:var(--rose2)">Heuristics Don't Generalize</div>
+      <div class="card-body">Otsu thresholding and Hough transforms break across microscope brands, staining protocols, and illumination profiles. Noise sensitivity is catastrophic at low SNR.</div>
+      <div style="margin-top:auto;font-size:11px;color:var(--t3)">~40% F1 drop on unseen cell lines</div>
+    </div>
+    <div class="card card-v" style="display:flex;flex-direction:column;gap:10px">
+      <div style="font-size:28px">&#9729;&#65039;</div>
+      <div class="tag tag-v" style="align-self:start">Cloud SaaS</div>
+      <div class="card-head" style="font-size:16px;color:var(--v2)">Privacy &amp; Cost Barriers</div>
+      <div class="card-body">Patient-derived microscopy data cannot leave the institution. Cloud platforms demand connectivity, proprietary formats, and per-image charges ,  punishing at scale.</div>
+      <div style="margin-top:auto;font-size:11px;color:var(--t3)">$0.08-0.40 per image at scale</div>
+    </div>
+  </div>
+
+  <div class="u5" style="margin-top:14px;background:rgba(6,214,160,0.07);border:1px solid rgba(6,214,160,0.25);border-radius:14px;padding:14px 20px;display:flex;align-items:center;gap:14px">
+    <span style="font-size:20px">&#10022;</span>
+    <div style="font-size:14px;color:var(--t1)"><strong style="color:var(--em2)">Lumen's answer:</strong> A local, deep-learning-first platform that auto-profiles every image, selects the right model, and delivers publication metrics ,  zero configuration, zero cloud, zero expertise tax.</div>
+  </div>
+
+</div>
+
+<div class="slide" id="s3">
+
+  <div class="eyebrow u1">Competitive Landscape</div>
+  <div class="h1 u2">Why researchers choose <span class="gv">Lumen</span></div>
+  <div class="sub u3">A feature-by-feature audit against the tools labs actually use today.</div>
+
+  <div class="cmp u4" style="flex:1;margin-bottom:14px;overflow:hidden">
+    <div class="cmp-head"><span>Capability</span><span>ImageJ/Fiji</span><span>CellProfiler</span><span style="color:var(--v2)">&#10022; Lumen</span></div>
+    <div class="cmp-row u5"><span>Deep learning segmentation (CNN-based)</span><span class="cx">&#8856;</span><span class="cp">&#9681;</span><span class="ck">&#10003;</span></div>
+    <div class="cmp-row u5"><span>Zero-config auto modality detection</span><span class="cx">&#8856;</span><span class="cx">&#8856;</span><span class="ck">&#10003;</span></div>
+    <div class="cmp-row u5"><span>Zeiss CZI native file support</span><span class="cp">&#9681;</span><span class="cx">&#8856;</span><span class="ck">&#10003;</span></div>
+    <div class="cmp-row u6"><span>Folder-scale batch (200+ images, resume-safe)</span><span class="cp">&#9681;</span><span class="ck">&#10003;</span><span class="ck">&#10003;</span></div>
+    <div class="cmp-row u6"><span>Sub-cellular puncta detection (DoG)</span><span class="cx">&#8856;</span><span class="cp">&#9681;</span><span class="ck">&#10003;</span></div>
+    <div class="cmp-row u6"><span>Per-channel fluorescence quantification</span><span class="cp">&#9681;</span><span class="ck">&#10003;</span><span class="ck">&#10003;</span></div>
+    <div class="cmp-row u7"><span>Physical unit calibration (pixel &harr; &micro;m&sup2;)</span><span class="cx">&#8856;</span><span class="ck">&#10003;</span><span class="ck">&#10003;</span></div>
+    <div class="cmp-row u7"><span>Reproducibility JSON manifest</span><span class="cx">&#8856;</span><span class="cp">&#9681;</span><span class="ck">&#10003;</span></div>
+    <div class="cmp-row u7"><span>100% local ,  no data upload ever</span><span class="ck">&#10003;</span><span class="ck">&#10003;</span><span class="ck">&#10003;</span></div>
+    <div class="cmp-row u8"><span>CUDA GPU acceleration</span><span class="cx">&#8856;</span><span class="cx">&#8856;</span><span class="ck">&#10003;</span></div>
+  </div>
+  <div class="u8" style="display:flex;gap:20px;font-size:11px;color:var(--t3)">
+    <span><span class="ck">&#10003;</span> Fully supported</span>
+    <span><span class="cp">&#9681;</span> Partial / plugin required</span>
+    <span><span class="cx">&#8856;</span> Not available</span>
+  </div>
+
+</div>
+
+<div class="slide" id="s4">
+
+  <div class="orb" style="width:350px;height:350px;background:radial-gradient(circle,rgba(56,189,248,0.1),transparent);bottom:-60px;right:-60px;--t:11s"></div>
+  <div class="eyebrow u1">System Architecture</div>
+  <div class="h1 u2">Three functional layers.<br><span class="gem">One unified platform.</span></div>
+  <div class="sub u3">A modular, single-responsibility architecture ,  GUI, processing, and persistence are cleanly separated and independently extensible.</div>
+
+  <div style="flex:1;display:flex;flex-direction:column;gap:12px">
+    <div class="card card-sky u4" style="padding:16px 20px">
+      <div style="display:flex;align-items:start;gap:16px">
+        <div style="background:rgba(56,189,248,0.15);border-radius:10px;padding:8px 12px;font-family:'Space Mono',monospace;font-size:11px;color:var(--sky);flex-shrink:0;text-align:center"><div style="font-size:20px;font-weight:700">L1</div><div>Imaging</div></div>
+        <div>
+          <div style="font-size:15px;font-weight:700;color:var(--sky2);margin-bottom:4px">Unified Multidimensional Imaging Layer <span class="mono">lumen.core.imaging</span></div>
+          <div style="font-size:12px;color:var(--t2);line-height:1.6">Extension-agnostic reader factory. Parses <strong style="color:var(--t1)">TIFF</strong>, <strong style="color:var(--t1)">PNG/JPG</strong>, and proprietary <strong style="color:var(--t1)">Zeiss CZI</strong> files via <span class="mono">aicspylibczi</span>. Handles Z-stacks, time-series, multi-channel hyperstacks. Enforces a memory-decoupling contract ,  all NumPy arrays fully copied from native C++ buffers.</div>
+          <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><span class="mono">TiffReader</span><span class="mono">CziReader</span><span class="mono">PilReader</span><span class="mono">ProjectionEngine</span><span class="mono">ImageReaderFactory</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="card card-em u5" style="padding:16px 20px">
+      <div style="display:flex;align-items:start;gap:16px">
+        <div style="background:rgba(6,214,160,0.15);border-radius:10px;padding:8px 12px;font-family:'Space Mono',monospace;font-size:11px;color:var(--em);flex-shrink:0;text-align:center"><div style="font-size:20px;font-weight:700">L2</div><div>Fluor.</div></div>
+        <div>
+          <div style="font-size:15px;font-weight:700;color:var(--em2);margin-bottom:4px">Fluorescence Quantification Engine <span class="mono">lumen.core.fluorescence</span></div>
+          <div style="font-size:12px;color:var(--t2);line-height:1.6">Automated multi-channel intensity profiling across Cellpose-generated cell masks. Sub-pixel perimeter via <span class="mono">cv2.arcLength</span>. Computes Mean, Median, Integrated Intensity, Min/Max, StdDev in 64-bit precision.</div>
+          <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><span class="mono">FluorescenceQuantifier</span><span class="mono">calculate_perimeter</span><span class="mono">export_cell_csv</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="card card-v u6" style="padding:16px 20px">
+      <div style="display:flex;align-items:start;gap:16px">
+        <div style="background:rgba(139,92,246,0.15);border-radius:10px;padding:8px 12px;font-family:'Space Mono',monospace;font-size:11px;color:var(--v2);flex-shrink:0;text-align:center"><div style="font-size:20px;font-weight:700">L3</div><div>Puncta</div></div>
+        <div>
+          <div style="font-size:15px;font-weight:700;color:var(--v2);margin-bottom:4px">DoG Puncta Quantification Suite <span class="mono">lumen.core.puncta</span></div>
+          <div style="font-size:12px;color:var(--t2);line-height:1.6">Localizes and measures sub-cellular compartments using Difference-of-Gaussians bandpass filtering, 8-connected labeling, vectorized size filtering via <span class="mono">np.bincount</span>, and centroid-based cell assignment.</div>
+          <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><span class="mono">PunctaDetector</span><span class="mono">PunctaAssigner</span><span class="mono">PunctaMeasurer</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="slide" id="s5">
+
+  <div class="orb" style="width:350px;height:350px;background:radial-gradient(circle,rgba(139,92,246,0.12),transparent);top:-60px;left:-60px;--t:13s"></div>
+  <div class="eyebrow u1">AI Engine &middot; Cellpose</div>
+  <div class="h1 u2">How the CNN actually<br><span class="gv">segments your cells</span></div>
+  <div class="sub u3">Not a threshold. Not a heuristic. A generalizable deep learning model trained on 70,000+ segmented biological images across dozens of cell types.</div>
+
+  <div class="g23" style="flex:1">
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div class="card u4">
+        <div class="card-head" style="color:var(--v2);font-size:14px">&#129504; U-Net Encoder-Decoder Architecture</div>
+        <div class="card-body">Convolutional layers with ReLU activations learn hierarchical spatial features. <strong style="color:var(--t1)">Skip connections</strong> feed encoder feature maps directly into the decoder at every resolution level.</div>
+      </div>
+      <div class="card u5">
+        <div class="card-head" style="color:var(--sky2);font-size:14px">&#127754; Gradient Flow Field Prediction</div>
+        <div class="card-body">Cellpose predicts a <strong style="color:var(--sky2)">spatial gradient flow field</strong> ,  the direction each pixel "flows" toward its parent cell's center ,  naturally handling <em>touching, overlapping, and irregular cells</em>.</div>
+      </div>
+      <div class="card u6">
+        <div class="card-head" style="color:var(--em2);font-size:14px">&#9881;&#65039; Lumen's Inference Pipeline</div>
+        <div style="display:flex;flex-direction:column;gap:4px;margin-top:6px">
+          <div class="mod-row"><span class="mod-name">img_normalize()</span><span class="mod-desc">1st/99th percentile stretch &rarr; float32 [0,1]</span></div>
+          <div class="mod-row"><span class="mod-name">model.eval()</span><span class="mod-desc">Cellpose cyto3 / nuclei forward pass (GPU/CPU)</span></div>
+          <div class="mod-row"><span class="mod-name">ndimage.label()</span><span class="mod-desc">Connected-component region extraction</span></div>
+          <div class="mod-row"><span class="mod-name">regionprops()</span><span class="mod-desc">Area &middot; centroid &middot; diameter &middot; intensity</span></div>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div class="u4" style="display:flex;gap:12px">
+        <div class="card card-v" style="flex:1;text-align:center;padding:20px"><div class="stat-n gv">cyto3</div><div class="stat-l">GFP cytoplasmic</div></div>
+        <div class="card card-sky" style="flex:1;text-align:center;padding:20px"><div class="stat-n" style="font-family:'Syne',sans-serif;font-size:32px;font-weight:900;color:var(--sky)">nuclei</div><div class="stat-l">DAPI nuclear</div></div>
+      </div>
+      <div class="card card-rose u5">
+        <div class="card-head" style="color:var(--rose2)">Why Cellpose beats watershed</div>
+        <div class="card-body" style="line-height:1.7">Watershed requires reliable <em>seed detection</em> ,  it fails on uneven illumination and touching cells. Cellpose's flow-field approach has <strong style="color:var(--t1)">no seed detection step</strong> and needs no manual tuning.</div>
+      </div>
+      <div class="card u6" style="background:rgba(56,189,248,0.05);border-color:rgba(56,189,248,0.2)">
+        <div class="card-head" style="color:var(--sky2)">&#127918; Tunable Quality Presets</div>
+        <div class="card-body"><strong style="color:var(--t1)">Balanced</strong> ,  default thresholds for typical density<br><strong style="color:var(--t1)">Sensitive</strong> ,  loosened thresholds for sparse/dim populations</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="slide" id="s6">
+
+  <div class="orb" style="width:450px;height:450px;background:radial-gradient(circle,rgba(6,214,160,0.14),transparent);top:-100px;right:-100px;--t:12s"></div>
+  <div class="eyebrow em u1">Live In The App &middot; Cell Segmentation Workflow</div>
+  <div class="h1 u2">One image file.<br><span class="gem">Single channel. AI-powered segmentation, live.</span></div>
+  <div class="sub u3">This is Lumen actually running: a fluorescence microscopy image loaded, contrast-stretched, and segmented using Cellpose.</div>
+
+  <div class="g32" style="flex:1;min-height:0">
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="card card-em u4">
+        <div class="card-head" style="color:var(--em2)">&#128193; Source File</div>
+        <div class="card-body"><span class="mono">F01_1615w1.TIF</span><br>Fluorescence Microscopy &middot; Auto-contrast stretched on import (1.0% to 99.0%)</div>
+      </div>
+      <div class="card card-sky u5">
+        <div class="card-head" style="color:var(--sky2)">&#128207; Extracted Metadata</div>
+        <div class="card-body">Resolution <strong style="color:var(--t1)">1392 &times; 1040</strong> &middot; Single-channel grayscale mode<br>Pixel size <strong style="color:var(--t1)">0.2201 &micro;m</strong>, parsed from TIFF metadata</div>
+      </div>
+      <div class="card card-v u6">
+        <div class="card-head" style="color:var(--v2)">&#129504; Active Workflow</div>
+        <div class="card-body">Cell Segmentation &middot; AI Segmentation (Cellpose) &middot; model <span class="mono">Cyto3</span> &middot; quality <span class="mono">Balanced</span><br>GPU Backend: Active (CUDA-accelerated)</div>
+      </div>
+      <div class="card card-fire u7">
+        <div class="card-head" style="color:var(--fire2)">&#128421;&#65039; Interactive Workspace</div>
+        <div class="card-body">A zoomable, pannable canvas with debounced sliders for mask opacity and outline display.</div>
+      </div>
+    </div>
+    <div class="frame u4" style="overflow:hidden;align-self:start">
+      <div class="frame-bar">
+        <div class="dot-r"></div><div class="dot-y"></div><div class="dot-g"></div>
+        <span class="frame-title">Lumen &middot; Image Analysis &middot; Single-Image Workspace</span>
+      </div>
+      <img src="screenshot_1.png" alt="cell segmentation" style="width:100%;display:block">
+    </div>
+  </div>
+
+</div>
+
+</div>
+
+<div class="slide" id="s7">
+
+
+
+  <div class="orb" style="width:400px;height:400px;background:radial-gradient(circle,rgba(139,92,246,0.14),transparent);bottom:-100px;left:-80px;--t:13s"></div>
+
+  <div class="eyebrow u1">Under The Hood &middot; Revamped CZI Pipeline</div>
+
+  <div class="h1 u2">From raw bytes to biology , <br><span class="gv">channel by channel</span></div>
+
+  <div class="sub u3">The CZI pipeline was rebuilt so any N-channel hyperstack decodes once and every channel view is served instantly from memory.</div>
+
+
+
+  <div class="pipe-wrap u4">
+
+    <div class="pipe-node card-v"><div class="tag tag-v" style="font-size:9px;margin-bottom:6px">STEP 1</div><div style="font-size:12px;font-weight:700;margin-bottom:4px">Raw CZI Bytes</div><div style="font-size:10px;color:var(--t2)">libCZI native buffer, single read</div></div>
+
+    <div class="pipe-arrow">&rarr;</div>
+
+    <div class="pipe-node card-sky"><div class="tag tag-sky" style="font-size:9px;margin-bottom:6px">STEP 2</div><div style="font-size:12px;font-weight:700;margin-bottom:4px">CziReader Decode</div><div style="font-size:10px;color:var(--t2)">aicspylibczi &middot; XML metadata + planes</div></div>
+
+    <div class="pipe-arrow">&rarr;</div>
+
+    <div class="pipe-node card-em"><div class="tag tag-em" style="font-size:9px;margin-bottom:6px">STEP 3</div><div style="font-size:12px;font-weight:700;margin-bottom:4px">Per-Channel Split</div><div style="font-size:10px;color:var(--t2)">DAPI / GFP / RFP arrays, memory-copied</div></div>
+
+    <div class="pipe-arrow">&rarr;</div>
+
+    <div class="pipe-node card-fire"><div class="tag tag-fire" style="font-size:9px;margin-bottom:6px">STEP 4</div><div style="font-size:12px;font-weight:700;margin-bottom:4px">Auto-Contrast &amp; Composite</div><div style="font-size:10px;color:var(--t2)">Per-channel percentile stretch, RGB merge</div></div>
+
+    <div class="pipe-arrow">&rarr;</div>
+
+    <div class="pipe-node card-rose"><div class="tag tag-rose" style="font-size:9px;margin-bottom:6px">STEP 5</div><div style="font-size:12px;font-weight:700;margin-bottom:4px">Segment + Quantify</div><div style="font-size:10px;color:var(--t2)">Cellpose on DAPI, stats on GFP/RFP masks</div></div>
+
+  </div>
+
+
+
+  <div class="g3 u5" style="margin-top:16px;flex:1">
+
+    <div class="card card-sky">
+
+      <div class="card-head" style="color:var(--sky2)">&#128309; Channel 0 &middot; DAPI</div>
+
+      <div class="card-body">Nuclear counterstain. Used as the <strong style="color:var(--t1)">segmentation reference channel</strong> ,  every downstream mask is anchored to it, since nuclei are the most reliable, non-overlapping landmark in a crowded field.</div>
+
+    </div>
+
+    <div class="card card-em">
+
+      <div class="card-head" style="color:var(--em2)">&#128994; Channel 1 &middot; GFP</div>
+
+      <div class="card-body">Cytoplasmic reporter signal. Quantified per-cell once masks exist: mean, median, integrated density ,  the primary readout channel in most transfection/expression assays.</div>
+
+    </div>
+
+    <div class="card card-rose">
+
+      <div class="card-head" style="color:var(--rose2)">&#128308; Channel 2 &middot; RFP / mCherry</div>
+
+      <div class="card-body">Secondary reporter for co-localization or dual-marker experiments. Same per-cell statistics, enabling GFP&harr;RFP correlation directly from one exported CSV.</div>
+
+    </div>
+
+  </div>
+
+
+
+  <div class="u6" style="margin-top:14px;background:rgba(139,92,246,0.07);border:1px solid rgba(139,92,246,0.25);border-radius:14px;padding:14px 20px;font-size:13px;color:var(--t2)">
+
+    <strong style="color:var(--v2)">Why this matters:</strong> before the revamp, switching channel view meant re-reading the file. Now the decoded planes stay resident, so composite &harr; single-channel toggling and re-contrast happen in milliseconds ,  even on a 3-channel, multi-scene hyperstack.
+
+  </div>
+
+
+
+</div>
+
+
+
+
+
+<div class="slide" id="s8">
+
+  <div class="orb" style="width:350px;height:350px;background:radial-gradient(circle,rgba(6,214,160,0.1),transparent);bottom:-60px;left:0;--t:11s"></div>
+  <div class="eyebrow u1">Inside Lumen &middot; Workspace &amp; Canvas</div>
+  <div class="h1 u2">Import once.<br><span class="gem">Inspect any cell interactively.</span></div>
+  <div class="sub u3">A hardware-accelerated single-image canvas for exploratory work, offering direct visual feedback and instant region queries.</div>
+
+  <div class="g32 u4" style="flex:1;min-height:0">
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="card card-v"><div class="card-head" style="color:var(--v2)">&#128433;&#65039; Hardware-Accelerated Canvas</div><div class="card-body">Built on Qt's <span class="mono">QGraphicsView</span>, providing smooth zooming, panning, and adjustable mask opacity overlays. Toggle between original and segmented masks instantly.</div></div>
+      <div class="card card-sky"><div class="card-head" style="color:var(--sky2)">&#128433;&#65039; Click-to-Inspect Any Cell</div><div class="card-body">Click any segmented region to retrieve immediate properties like Cell ID, Area, Diameter, and Centroid, queryable directly on the canvas.</div></div>
+      <div class="card card-em"><div class="card-head" style="color:var(--em2)">&#129525; Non-Blocking Inference</div><div class="card-body">All model evaluation runs on a background <span class="mono">QThread</span> worker. The UI remains fully responsive during multi-minute CPU inference runs.</div></div>
+    </div>
+    <div class="frame u4" style="overflow:hidden;align-self:start">
+      <div class="frame-bar">
+        <div class="dot-r"></div><div class="dot-y"></div><div class="dot-g"></div>
+        <span class="frame-title">Lumen &middot; File Upload &middot; Workflow Selection</span>
+      </div>
+      <img src="screenshot_2.png" alt="import workspace" style="width:100%;display:block">
+    </div>
+  </div>
+
+</div>
+
+<div class="slide" id="s9">
+
+  <div class="orb" style="width:350px;height:350px;background:radial-gradient(circle,rgba(139,92,246,0.1),transparent);bottom:-60px;right:-60px;--t:11s"></div>
+  <div class="eyebrow u1">Inside Lumen &middot; Batch Processing Engine</div>
+  <div class="h1 u2">Or point at a folder<br><span class="gv">and walk away.</span></div>
+  <div class="sub u3">A persistent background execution system designed for folder-scale runs of hundreds of images, fully decoupled from the GUI.</div>
+
+  <div class="g32 u4" style="flex:1;min-height:0">
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="card card-fire"><div class="card-head" style="color:var(--fire2)">&#9889; Non-Blocking Batch Design</div><div class="card-body">A progress bar, live execution logs, and an active cancel button keep the batch run interactive. The GUI never freezes, even under heavy stress.</div></div>
+      <div class="card card-rose"><div class="card-head" style="color:var(--rose2)">&#128260; Resume-Safe Execution</div><div class="card-body">Lumen automatically checks the target directory and skips previously processed images, allowing interrupted runs to resume exactly where they stopped.</div></div>
+      <div class="card card-v"><div class="card-head" style="color:var(--v2)">&#128202; Strict FSM Lifecycle</div><div class="card-body">Atomic state transitions (IDLE, RUNNING, PAUSED) protect the session, preventing torn states or race conditions between worker threads.</div></div>
+    </div>
+    <div class="frame u4" style="overflow:hidden;align-self:start">
+      <div class="frame-bar">
+        <div class="dot-r"></div><div class="dot-y"></div><div class="dot-g"></div>
+        <span class="frame-title">Lumen &middot; Batch Analysis Pipeline &middot; 100% Complete</span>
+      </div>
+      <img src="screenshot_3.png" alt="batch engine" style="width:100%;display:block">
+    </div>
+  </div>
+
+</div>
+
+    <div style="display:flex;flex-direction:column;gap:10px">
+
+      <div class="card card-fire"><div class="card-head" style="color:var(--fire2)">&#9889; Non-Blocking Batch by Design</div><div class="card-body">Progress bar, live log, and cancel button stay interactive across a 200-image run. GUI never freezes.</div></div>
+
+      <div class="card card-rose"><div class="card-head" style="color:var(--rose2)">&#128260; SKIPPED_ALREADY_EXISTS</div><div class="card-body">Output detection skips processed images on re-run ,  an interrupted 200-image batch resumes exactly where it stopped.</div></div>
+
+      <div class="card"><div class="card-head" style="color:var(--v2)">&#128202; Strict FSM Lifecycle</div><div class="card-body">Atomic transitions <span class="mono">IDLE &rarr; RUNNING &rarr; PAUSED &rarr; IDLE</span>. No torn state on interrupt, thread-safe across both workers.</div></div>
+
+    </div>
+
+  </div>
+
+
+
+</div>
+
+
+
+<div class="slide" id="s10">
+
+  <div class="orb" style="width:350px;height:350px;background:radial-gradient(circle,rgba(245,158,11,0.08),transparent);top:-60px;right:-40px;--t:12s"></div>
+  <div class="eyebrow u1">Inside Lumen &middot; Results Explorer</div>
+  <div class="h1 u2">Every cell, every image,<br><span class="gf">searchable and visual.</span></div>
+  <div class="sub u3">Every processed image becomes a queryable record. Click any result to explore its multi-colored segmented boundaries and metrics.</div>
+
+  <div class="g32 u4" style="flex:1;min-height:0">
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="card card-v"><div class="card-head" style="color:var(--v2)">&#128269; Debounced Results Gallery</div><div class="card-body">A debounced filename filter keeps navigation fluid. Displays processed list items with execution status badges (Skipped, Completed).</div></div>
+      <div class="card card-em"><div class="card-head" style="color:var(--em2)">&#128203; Color-Coded Mask Overlay</div><div class="card-body">Renders high-contrast, multi-colored segmentation masks over cell bodies, allowing researchers to quickly audit cell boundaries.</div></div>
+      <div class="card card-sky"><div class="card-head" style="color:var(--sky2)">&#128190; Per-Image Detail Sidebar</div><div class="card-body">Instantly displays the cell count, active model preset, resolved backend (CUDA/CPU), and runtime whenever an image is selected.</div></div>
+    </div>
+    <div class="frame u4" style="overflow:hidden;align-self:start">
+      <div class="frame-bar">
+        <div class="dot-r"></div><div class="dot-y"></div><div class="dot-g"></div>
+        <span class="frame-title">Lumen &middot; Batch Results Explorer &middot; Multi-Channel Masks</span>
+      </div>
+      <img src="screenshot_4.png" alt="results explorer" style="width:100%;display:block">
+    </div>
+  </div>
+
+</div>
+
+    <div style="display:flex;flex-direction:column;gap:10px">
+
+      <div class="card card-fire"><div class="card-head" style="color:var(--fire2)">&#128202; Standardized Per-Cell Metrics</div><div class="card-body">Total count, mean/median area, cell density, average diameter ,  the same six statistics on every run, in every export.</div></div>
+
+      <div class="card card-rose"><div class="card-head" style="color:var(--rose2)">&#128228; Four Export Formats</div><div class="card-body"><span class="mono">CSV</span> per-cell table &middot; <span class="mono">PDF</span> A4 report &middot; <span class="mono">TIFF</span> 16-bit label mask &middot; <span class="mono">JSON</span> repro manifest.</div></div>
+
+      <div class="card"><div class="card-head" style="color:var(--v2)">&#9851;&#65039; Reproducibility Manifest</div><div class="card-body">Every JSON captures model name, thresholds, Cellpose version, timestamp ,  re-running 6 months later reproduces byte-identical output.</div></div>
+
+    </div>
+
+  </div>
+
+
+
+</div>
+
+
+
+<div class="slide" id="s11">
+
+  <div class="orb" style="width:350px;height:350px;background:radial-gradient(circle,rgba(6,214,160,0.1),transparent);top:-40px;right:-40px;--t:10s"></div>
+  <div class="eyebrow u1">Inside Lumen &middot; Quantification &amp; Exports</div>
+  <div class="h1 u2">Standardized statistics,<br><span class="gem">reproducible export actions.</span></div>
+  <div class="sub u3">Every run resolves to the same six core cell metrics. Export your raw tabular numbers or compiled A4 reports in seconds.</div>
+
+  <div class="g32 u4" style="flex:1;min-height:0">
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="card card-em"><div class="card-head" style="color:var(--em2)">&#128300; Fluorescence &amp; Physical Calibration</div><div class="card-body">Per-channel intensity metrics calculated at 64-bit precision. Voxel metadata translates pixels to square microns automatically.</div></div>
+      <div class="card card-rose"><div class="card-head" style="color:var(--rose2)">&#127760; Difference-of-Gaussians Puncta Engine</div><div class="card-body">Localizes sub-cellular circular spots using Difference-of-Gaussians bandpass filtering and maps centroids to cell IDs.</div></div>
+      <div class="card card-fire"><div class="card-head" style="color:var(--fire2)">&#128228; Standardized Export Formats</div><div class="card-body">Export CSV cell tables, A4 PDF summary reports, 16-bit label mask TIFFs, and parameter-locked JSON reproducibility manifests.</div></div>
+    </div>
+    <div class="frame u4" style="overflow:hidden;align-self:start">
+      <div class="frame-bar">
+        <div class="dot-r"></div><div class="dot-y"></div><div class="dot-g"></div>
+        <span class="frame-title">Lumen &middot; Quantification Metrics &middot; Export Actions</span>
+      </div>
+      <img src="screenshot_5.png" alt="quantification dashboard" style="width:100%;display:block">
+    </div>
+  </div>
+
+</div>
+
+    <div style="display:flex;flex-direction:column;gap:10px">
+
+      <div class="eyebrow" style="margin-bottom:2px;font-size:9px">DoG Puncta Engine</div>
+
+      <div class="card card-rose"><div class="card-head" style="color:var(--rose2)">&#127760; Difference of Gaussians Filter</div><div class="card-body">Bandpass filter enhances circular spots of a chosen size range while suppressing background gradients.</div></div>
+
+      <div class="formula" style="font-size:11px">DoG = G(&sigma;<sub>1</sub>) &minus; G(&sigma;<sub>2</sub>)<br>threshold = &mu;<sub>DoG</sub> + c&middot;&sigma;<sub>DoG</sub> (adaptive)<br>diameter = 2&radic;(area/&pi;)</div>
+
+      <div class="card card-fire"><div class="card-head" style="color:var(--fire2)">&#128279; Puncta-to-Cell Assignment</div><div class="card-body">Centroids of labeled puncta mapped to the owning Cellpose cell ID; unassigned puncta collected separately.</div></div>
+
+    </div>
+
+  </div>
+
+
+
+</div>
+
+
+
+
+
+<div class="slide" id="s12">
+
+  <div class="orb" style="width:400px;height:400px;background:radial-gradient(circle,rgba(56,189,248,0.12),transparent);top:-80px;right:-80px;--t:11s"></div>
+  <div class="eyebrow u1">Layer 1 &middot; Imaging Layer</div>
+  <div class="h1 u2">Native support for<br><span class="gem">Zeiss CZI &amp; hyperstacks</span></div>
+  <div class="sub u3">One reader factory handles every format a modern microscopy lab produces ,  from simple PNGs to proprietary multi-scene Z-stacks.</div>
+
+  <div class="g2" style="flex:1">
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div class="card card-sky u4"><div class="card-head" style="color:var(--sky2);font-size:14px">&#128193; ImageReaderFactory</div><div class="card-body">Instantiates the correct reader from file extension. Enforces the <strong style="color:var(--t1)">memory-decoupling contract</strong> ,  NumPy arrays are fully <span class="mono">.copy()</span>-d out of native library buffers, preventing silent C++ segfaults in background threads.</div></div>
+      <div class="card card-em u5"><div class="card-head" style="color:var(--em2);font-size:14px">&#128300; CziReader &middot; Zeiss Native</div><div class="card-body">Parses Zeiss CZI via <span class="mono">aicspylibczi</span>. Dynamically extracts XML metadata for physical dimensions, voxel scale, scene counts, Z-planes, and channel designations (DAPI, FITC, mCherry).</div></div>
+      <div class="card card-v u6"><div class="card-head" style="color:var(--v2);font-size:14px">&#128208; Z-Stack Projection Engine</div><div class="card-body">Stateless <span class="mono">ProjectionEngine</span> collapses 3D hyperstacks into 2D analysis matrices via <strong style="color:var(--t1)">Maximum Intensity Projection</strong> or Mean Projection.</div></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div class="card u4" style="background:rgba(56,189,248,0.06);border-color:rgba(56,189,248,0.3)">
+        <div class="card-head" style="color:var(--sky2);font-size:13px;margin-bottom:10px">READER INTERFACE CONTRACT</div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--v3);line-height:1.9;background:rgba(0,0,0,0.3);border-radius:8px;padding:10px">class ImageReader(ABC):<br>&nbsp;&nbsp;def open(path) &rarr; None<br>&nbsp;&nbsp;def get_metadata() &rarr; ImageMetadata<br>&nbsp;&nbsp;def read_slice(z,t,c) &rarr; np.ndarray<br>&nbsp;&nbsp;def close() &rarr; None<br><br># Memory contract:<br># return array.copy() always</div>
+      </div>
+      <div class="card card-fire u5"><div class="card-head" style="color:var(--fire2);font-size:14px">&#128202; ImageMetadata Dataclass</div><div class="card-body">Standardizes metadata across formats: dimensions (X,Y,Z,T,C), voxel size, dtype, bit depth, channel names. Zero format-specific branching downstream.</div></div>
+      <div class="card u6" style="background:rgba(139,92,246,0.06);border-color:rgba(139,92,246,0.3)">
+        <div class="card-head" style="color:var(--v2)">Supported Formats</div>
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><span class="tag tag-sky">TIFF multi-channel</span><span class="tag tag-em">Zeiss CZI</span><span class="tag tag-v">PNG / JPG</span><span class="tag tag-fire">16-bit grayscale</span><span class="tag tag-rose">Z-stacks</span></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="slide" id="s13">
+
+  <div class="orb" style="width:300px;height:300px;background:radial-gradient(circle,rgba(245,158,11,0.08),transparent);bottom:-40px;right:0;--t:14s"></div>
+  <div class="eyebrow u1">Under The Hood</div>
+  <div class="h1 u2">Pinned. Validated.<br><span class="gf">Production-grade.</span></div>
+  <div class="sub u3">Every dependency chosen for scientific reproducibility. Cellpose pinned below 4.0 to prevent silent model behavior changes.</div>
+
+  <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:14px">
+    <div class="g4 u4">
+      <div class="card" style="text-align:center;padding:16px 10px"><div style="font-size:24px;margin-bottom:6px">&#128013;</div><div style="font-size:13px;font-weight:700">Python 3.12+</div><div style="font-size:10px;color:var(--t3);margin-top:3px">Core runtime</div></div>
+      <div class="card" style="text-align:center;padding:16px 10px"><div style="font-size:24px;margin-bottom:6px">&#128421;&#65039;</div><div style="font-size:13px;font-weight:700">PySide6 Qt 6</div><div style="font-size:10px;color:var(--t3);margin-top:3px">GUI framework</div></div>
+      <div class="card" style="text-align:center;padding:16px 10px"><div style="font-size:24px;margin-bottom:6px">&#128293;</div><div style="font-size:13px;font-weight:700">PyTorch</div><div style="font-size:10px;color:var(--t3);margin-top:3px">DL inference</div></div>
+      <div class="card card-v" style="text-align:center;padding:16px 10px"><div style="font-size:24px;margin-bottom:6px">&#129441;</div><div style="font-size:13px;font-weight:700;color:var(--v2)">Cellpose &lt;4.0</div><div style="font-size:10px;color:var(--t3);margin-top:3px">CNN segmentation</div></div>
+    </div>
+    <div class="g4 u5">
+      <div class="card" style="text-align:center;padding:16px 10px"><div style="font-size:24px;margin-bottom:6px">&#128290;</div><div style="font-size:13px;font-weight:700">NumPy</div><div style="font-size:10px;color:var(--t3);margin-top:3px">Array operations</div></div>
+      <div class="card" style="text-align:center;padding:16px 10px"><div style="font-size:24px;margin-bottom:6px">&#128444;&#65039;</div><div style="font-size:13px;font-weight:700">tifffile</div><div style="font-size:10px;color:var(--t3);margin-top:3px">16-bit TIFF I/O</div></div>
+      <div class="card" style="text-align:center;padding:16px 10px"><div style="font-size:24px;margin-bottom:6px">&#128300;</div><div style="font-size:13px;font-weight:700">SciPy ndimage</div><div style="font-size:10px;color:var(--t3);margin-top:3px">Region analysis</div></div>
+      <div class="card" style="text-align:center;padding:16px 10px"><div style="font-size:24px;margin-bottom:6px">&#128065;&#65039;</div><div style="font-size:13px;font-weight:700">OpenCV</div><div style="font-size:10px;color:var(--t3);margin-top:3px">Contour precision</div></div>
+    </div>
+    <div class="g4 u6">
+      <div class="card" style="text-align:center;padding:16px 10px"><div style="font-size:24px;margin-bottom:6px">&#127981;</div><div style="font-size:13px;font-weight:700">aicspylibczi</div><div style="font-size:10px;color:var(--t3);margin-top:3px">Zeiss CZI parser</div></div>
+      <div class="card" style="text-align:center;padding:16px 10px"><div style="font-size:24px;margin-bottom:6px">&#128449;&#65039;</div><div style="font-size:13px;font-weight:700">SQLite3</div><div style="font-size:10px;color:var(--t3);margin-top:3px">Session state</div></div>
+      <div class="card" style="text-align:center;padding:16px 10px"><div style="font-size:24px;margin-bottom:6px">&#9889;</div><div style="font-size:13px;font-weight:700">CUDA</div><div style="font-size:10px;color:var(--t3);margin-top:3px">GPU backend</div></div>
+      <div class="card" style="text-align:center;padding:16px 10px"><div style="font-size:24px;margin-bottom:6px">&#129514;</div><div style="font-size:13px;font-weight:700">pytest</div><div style="font-size:10px;color:var(--t3);margin-top:3px">60+ unit tests</div></div>
+    </div>
+    <div class="u7" style="background:rgba(139,92,246,0.07);border:1px solid rgba(139,92,246,0.25);border-radius:12px;padding:14px 20px;display:grid;grid-template-columns:repeat(4,1fr);gap:0;text-align:center">
+      <div><div style="font-size:26px;font-weight:900;color:var(--v2)">60+</div><div style="font-size:10px;color:var(--t2)">Unit tests</div></div>
+      <div><div style="font-size:26px;font-weight:900;color:var(--sky)">200+</div><div style="font-size:10px;color:var(--t2)">Images validated</div></div>
+      <div><div style="font-size:26px;font-weight:900;color:var(--em)">0</div><div style="font-size:10px;color:var(--t2)">Cloud deps</div></div>
+      <div><div style="font-size:26px;font-weight:900;color:var(--fire)">4</div><div style="font-size:10px;color:var(--t2)">Export formats</div></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="slide" id="s14">
+
+  <div class="orb" style="width:500px;height:500px;background:radial-gradient(circle,rgba(139,92,246,0.1),transparent);top:-150px;right:-100px;--t:14s"></div>
+  <div class="eyebrow u1">Status v0.2.0 &middot; What's Next</div>
+  <div class="h1 u2">Proven today.<br><span class="gv">Five phases to a full platform.</span></div>
+  <div class="sub u3">An honest status ,  validated coverage and known limits ,  alongside the structured roadmap ahead.</div>
+
+  <div class="g2 u4" style="margin-bottom:12px">
+    <div class="card card-em" style="padding:14px 18px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><span class="tag tag-em">&#10003; Validated</span></div>
+      <div style="font-size:11px;color:var(--t2);line-height:1.7">
+        End-to-end on 16-bit DAPI/GFP fluorescence TIFFs &middot; 60 unit tests &middot; 200-image stress test, no leaks &middot; CUDA + CPU both end-to-end &middot; CZI XML metadata + channel extraction &middot; DoG pipeline detect&rarr;assign&rarr;measure
+      </div>
+    </div>
+    <div class="card card-fire" style="padding:14px 18px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><span class="tag tag-fire">&#9651; Known Limits</span></div>
+      <div style="font-size:11px;color:var(--t2);line-height:1.7">
+        Pause&rarr;Resume shows a brief first-image latency spike &middot; manual mask editor toolbar clips at non-default aspect ratios &middot; StarDist routing hooks exist but backend not yet wired &middot; multi-scene CZI selector still loads first scene automatically
+      </div>
+    </div>
+  </div>
+
+  <div class="g5 u5" style="flex:1;align-items:start">
+    <div class="rmc rmc-v"><div class="tag tag-v" style="font-size:8px;margin-bottom:6px">PHASE 1</div><div style="font-size:12px;font-weight:700;margin-bottom:6px;color:var(--v2)">Fluorescence Pipeline Completion</div><div style="font-size:10px;color:var(--t2);line-height:1.6">Batch worker integration &middot; co-localization (Pearson/Manders) &middot; multi-scene CZI selector</div></div>
+    <div class="rmc rmc-sky"><div class="tag tag-sky" style="font-size:8px;margin-bottom:6px">PHASE 2</div><div style="font-size:12px;font-weight:700;margin-bottom:6px;color:var(--sky2)">StarDist &amp; Model Ensemble</div><div style="font-size:10px;color:var(--t2);line-height:1.6">Backend wired &middot; side-by-side comparison &middot; ensemble voting for ambiguous cases</div></div>
+    <div class="rmc rmc-em"><div class="tag tag-em" style="font-size:8px;margin-bottom:6px">PHASE 3</div><div style="font-size:12px;font-weight:700;margin-bottom:6px;color:var(--em2)">Full 3D Z-Stack Analysis</div><div style="font-size:10px;color:var(--t2);line-height:1.6">Cellpose <span class="mono">do_3D</span> &middot; volumetric metrics &middot; napari 3D rendering</div></div>
+    <div class="rmc rmc-fire"><div class="tag tag-fire" style="font-size:8px;margin-bottom:6px">PHASE 4</div><div style="font-size:12px;font-weight:700;margin-bottom:6px;color:var(--fire2)">Time-Series Tracking</div><div style="font-size:10px;color:var(--t2);line-height:1.6">Hungarian frame assignment &middot; IoU tracks &middot; division event detection</div></div>
+    <div class="rmc rmc-rose"><div class="tag tag-rose" style="font-size:8px;margin-bottom:6px">PHASE 5</div><div style="font-size:12px;font-weight:700;margin-bottom:6px;color:var(--rose2)">AI-Powered Assistant</div><div style="font-size:10px;color:var(--t2);line-height:1.6">NL queries over results &middot; local LLM report drafts &middot; 100% local</div></div>
+  </div>
+
+</div>
+
+<div class="slide" id="s15">
+
+  <div class="orb" style="width:600px;height:600px;background:radial-gradient(circle,rgba(139,92,246,0.18),transparent);top:-200px;left:50%;transform:translateX(-50%);--t:16s"></div>
+  <div class="orb" style="width:300px;height:300px;background:radial-gradient(circle,rgba(6,214,160,0.1),transparent);bottom:-60px;right:60px;--t:11s;animation-delay:-5s"></div>
+  <div style="flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;position:relative;z-index:1">
+    <div class="eyebrow u1" style="justify-content:center">The Endgame</div>
+    <div class="h1 u2" style="font-size:clamp(28px,4.2vw,50px);max-width:800px;text-align:center">From desktop tool to<br><span class="gw">global research infrastructure</span></div>
+    <div class="sub u3" style="max-width:660px;text-align:center;margin-top:12px">A local AI platform that gives every researcher worldwide access to publication-grade biological image analysis ,  no cloud, no cost, no expertise barrier.</div>
+
+    <div class="g3 u4" style="margin-top:20px;width:100%;max-width:900px">
+      <div class="card card-v" style="text-align:center;padding:20px 16px"><div style="font-size:32px;margin-bottom:8px">&#128300;</div><div style="font-size:14px;font-weight:700;margin-bottom:6px">Any Modality</div><div style="font-size:11px;color:var(--t2)">Fluorescence &middot; Brightfield &middot; Confocal &middot; CZI hyperstacks, auto-detected and auto-routed.</div></div>
+      <div class="card card-sky" style="text-align:center;padding:20px 16px"><div style="font-size:32px;margin-bottom:8px">&#129302;</div><div style="font-size:14px;font-weight:700;margin-bottom:6px">AI-First Analysis</div><div style="font-size:11px;color:var(--t2)">Cellpose + StarDist ensemble &middot; DoG puncta &middot; 3D volumetrics &middot; time-series tracking.</div></div>
+      <div class="card card-em" style="text-align:center;padding:20px 16px"><div style="font-size:32px;margin-bottom:8px">&#127757;</div><div style="font-size:14px;font-weight:700;margin-bottom:6px">Democratized Access</div><div style="font-size:11px;color:var(--t2)">Open source, runs offline on any laptop ,  levels the field between labs of any budget.</div></div>
+    </div>
+
+    <div class="u5" style="margin-top:18px;max-width:800px;background:linear-gradient(135deg,rgba(139,92,246,0.1),rgba(56,189,248,0.06));border:1px solid rgba(139,92,246,0.3);border-radius:16px;padding:16px 22px">
+      <div style="font-size:13px;color:var(--t2);line-height:1.8"><strong style="color:var(--v2)">The thesis:</strong> modern biological microscopy produces datasets that no human can analyze by hand. The bottleneck is not data collection ,  it's quantification. Lumen's goal is to make that bottleneck disappear.</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="slide" id="s16">
+
+  <div class="orb" style="width:700px;height:700px;background:radial-gradient(circle,rgba(6,214,160,0.18),transparent);top:-220px;right:-150px;--t:14s"></div>
+  <div style="flex:1;display:flex;flex-direction:column;justify-content:center;align-items:flex-end;text-align:right;position:relative;z-index:1">
+    <div class="divider-num u1">PROJECT&nbsp;02 &nbsp;/&nbsp;02</div>
+    <div class="divider-title u2 gem">Atlas-Lab</div>
+    <div class="divider-rule u3" style="background:linear-gradient(90deg,var(--sky),var(--em));margin-left:auto"></div>
+    <div class="u4" style="font-size:clamp(15px,1.7vw,21px);color:var(--t2);max-width:640px;line-height:1.65">
+      A hybrid semantic retrieval engine and a deterministic biomedical knowledge graph ,  surfacing connected biology in under 10ms, with zero LLM hallucination risk.
+    </div>
+    <div class="u5" style="margin-top:26px;display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end">
+      <span class="tag tag-em">Qdrant Vector Search</span>
+      <span class="tag tag-sky">BM25 + RRF Fusion</span>
+      <span class="tag tag-v">PostgreSQL Graph</span>
+      <span class="tag tag-fire">FastAPI</span>
+      <span class="tag tag-rose">Sub-5ms Latency</span>
+    </div>
+  </div>
+
+</div>
+
+<div class="slide" id="s17">
+
+  <div class="orb" style="width:400px;height:400px;background:radial-gradient(circle,rgba(6,214,160,0.1),transparent);top:-80px;right:-60px;--t:11s"></div>
+  <div class="eyebrow em u1">The Problem &middot; Fragmentation &amp; Brittleness</div>
+  <div class="h1 u2">Biomedical databases are<br><span class="gem">isolated, and exact-match only</span></div>
+  <div class="sub u3">Compounds, proteins, and papers live in separate registries. A single typo returns nothing.</div>
+
+  <div class="g23" style="flex:1">
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="card card-rose"><div class="card-head" style="color:var(--rose2)">&#10060; Lexical Mismatch</div><div class="card-body">Search <span class="mono">"metformn"</span> for <span class="mono">metformin</span> ,  a single typo in complex chemical nomenclature returns a flat <span class="mono">404</span>.</div></div>
+      <div class="card card-fire"><div class="card-head" style="color:var(--fire2)">&#10060; Semantic Disconnect</div><div class="card-body"><span class="mono">"anti-inflammatory pain killer"</span> won't match documents that only mention <span class="mono">"COX-2 inhibition"</span> without semantic models.</div></div>
+      <div class="card card-v"><div class="card-head" style="color:var(--v2)">&#10060; Siloed Data</div><div class="card-body">Compounds (PubChem), proteins (UniProt), and literature (PubMed) require manual cross-referencing across separate REST calls.</div></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <div class="eyebrow" style="font-size:9px;margin-bottom:2px">The Solution &middot; Dual-Engine Design</div>
+      <div class="schema-box">
+        <div style="text-align:center;font-weight:700;color:#fff;margin-bottom:8px">[ User Query ]</div>
+        <div style="text-align:center;color:var(--t3)">&darr;</div>
+        <div style="background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);border-radius:8px;padding:6px;text-align:center;color:var(--sky2);margin:4px 0">Query Resolution Layer</div>
+        <div style="text-align:center;color:var(--t3)">&darr; corrected query</div>
+        <div style="background:rgba(139,92,246,0.1);border:1px solid rgba(139,92,246,0.3);border-radius:8px;padding:6px;text-align:center;color:var(--v3);margin:4px 0">Hybrid Search &middot; Dense + Sparse + RRF + Rerank</div>
+        <div style="display:flex;gap:8px;margin-top:6px">
+          <div style="flex:1;background:rgba(6,214,160,0.1);border:1px solid rgba(6,214,160,0.3);border-radius:8px;padding:6px;text-align:center;color:var(--em2)">Search Chunks &amp; Ranking</div>
+          <div style="flex:1;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:6px;text-align:center;color:var(--fire2)">Related Biology Graph</div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--t2);line-height:1.6;margin-top:2px">Two subsystems run in parallel and stay isolated ,  a slow graph lookup or external API never degrades core search latency.</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="slide" id="s18">
+
+  <div class="orb" style="width:350px;height:350px;background:radial-gradient(circle,rgba(56,189,248,0.1),transparent);bottom:-60px;left:-60px;--t:12s"></div>
+  <div class="eyebrow em u1">Query Resolution &amp; Typo Tolerance</div>
+  <div class="h1 u2">From <span class="gf">"paracetmol"</span> to<br><span class="gem">acetaminophen</span>, before search runs</div>
+  <div class="sub u3">A four-stage resolution layer runs ahead of retrieval so typos and brand names never cost a zero-result query.</div>
+
+  <div style="flex:1;position:relative;padding-left:8px">
+    <div class="tl-line"></div>
+    <div class="tl-item u4"><div class="tl-dot" style="background:var(--v);color:#fff">1</div><div class="card" style="padding:14px 18px"><div class="card-head" style="color:var(--v2)">Normalization</div><div class="card-body">Accent stripping, case folding, whitespace normalization on the raw query string.</div></div></div>
+    <div class="tl-item u5"><div class="tl-dot" style="background:var(--sky);color:#04040a">2</div><div class="card" style="padding:14px 18px"><div class="card-head" style="color:var(--sky2)">Local Exact Synonym Match</div><div class="card-body">Brand &rarr; generic lookup against a local Postgres cache ,  <span class="mono">Advil</span> resolves to <span class="mono">Ibuprofen</span> instantly.</div></div></div>
+    <div class="tl-item u6"><div class="tl-dot" style="background:var(--em);color:#04040a">3</div><div class="card" style="padding:14px 18px"><div class="card-head" style="color:var(--em2)">Local Levenshtein Fuzzy Match (&ge;90)</div><div class="card-body">RapidFuzz ratio scoring against known compound names catches typos like <span class="mono">paracetmol &rarr; acetaminophen</span> without a network call.</div></div></div>
+    <div class="tl-item u7"><div class="tl-dot" style="background:var(--fire);color:#04040a">4</div><div class="card" style="padding:14px 18px"><div class="card-head" style="color:var(--fire2)">Last-Resort PubChem Autocomplete API</div><div class="card-body">Only when local resolution fails ,  keeps the expensive network hop rare, not the default path.</div></div></div>
+  </div>
+
+  <div class="u8" style="margin-top:8px;background:rgba(6,214,160,0.07);border:1px solid rgba(6,214,160,0.25);border-radius:14px;padding:12px 20px;font-size:13px;color:var(--t2)">
+    Resolution runs in <strong style="color:var(--em2)">~1ms locally</strong> for the overwhelming majority of queries ,  the network fallback is the exception, not the rule.
+  </div>
+
+</div>
+
+<div class="slide" id="s19">
+
+  <div class="orb" style="width:400px;height:400px;background:radial-gradient(circle,rgba(139,92,246,0.12),transparent);top:-80px;right:-60px;--t:13s"></div>
+  <div class="eyebrow em u1">The Hybrid Search Engine</div>
+  <div class="h1 u2">Dense meets sparse , <br><span class="gv">fused by Reciprocal Rank Fusion</span></div>
+  <div class="sub u3">Dense and sparse retrieval capture different dimensions of relevance; overlap between their top results is only 10.6%, so fusing both beats either alone.</div>
+
+  <div class="g23" style="flex:1">
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="card card-v u4"><div class="card-head" style="color:var(--v2)">&#128302; Dense Retrieval</div><div class="card-body">Qdrant vector database using <span class="mono">BAAI/bge-m3</span> embeddings ,  multi-lingual, locally cached, captures semantic similarity.</div></div>
+      <div class="card card-sky u5"><div class="card-head" style="color:var(--sky2)">&#128269; Sparse Retrieval</div><div class="card-body">BM25 keyword index ,  catches exact terminology and rare tokens dense embeddings under-weight.</div></div>
+      <div class="card card-em u6"><div class="card-head" style="color:var(--em2)">&#128257; Fusion &amp; Reranking</div><div class="card-body">Reciprocal Rank Fusion merges both ranked lists without relying on raw uncalibrated scores; a cross-encoder reranker refines the top candidates.</div></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="formula u4">RRF_Score(d) = &sum;<sub>m&isin;M</sub> 1 / (k + r<sub>m</sub>(d))<br><br>k = 60 (smoothing constant)<br>M = { Dense, Sparse }</div>
+      <div class="card u5" style="background:rgba(0,0,0,0.3);border-color:rgba(139,92,246,0.25)">
+        <div class="card-head" style="color:var(--v2);font-size:12px">rrf_fusion() ,  core loop</div>
+        <div style="font-family:'Space Mono',monospace;font-size:10.5px;color:var(--sky2);line-height:1.8">for rank, hit in enumerate(dense_hits):<br>&nbsp;&nbsp;scores[hit.id] += 1/(k+rank+1)<br>for rank, hit in enumerate(sparse_hits):<br>&nbsp;&nbsp;scores[hit.id] += 1/(k+rank+1)<br>return sorted(scores, reverse=True)</div>
+      </div>
+      <div class="card card-fire u6" style="text-align:center">
+        <div class="stat-n gf" style="font-size:34px">10.6%</div>
+        <div class="stat-l">dense &harr; sparse top-result overlap</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="slide" id="s20">
+
+  <div class="orb" style="width:350px;height:350px;background:radial-gradient(circle,rgba(245,158,11,0.1),transparent);bottom:-60px;right:-40px;--t:12s"></div>
+  <div class="eyebrow em u1">The Additive Knowledge Graph</div>
+  <div class="h1 u2">Deterministic edges,<br><span class="gem">never hallucinated ones</span></div>
+  <div class="sub u3">Every node and edge maps directly from source-backed metadata ,  no LLM entity extraction, no probabilistic guessing.</div>
+
+  <div class="g23" style="flex:1">
+    <div class="schema-box u4">
+      <div class="schema-title">graph_nodes</div>
+      <div><span class="schema-pk">PK</span> node_id (TEXT)</div>
+      <div>&nbsp;&nbsp;entity_id, entity_type (TEXT)</div>
+      <div>&nbsp;&nbsp;canonical_name, aliases (TEXT[])</div>
+      <div>&nbsp;&nbsp;source_system, properties (JSONB)</div>
+      <div style="margin-top:10px" class="schema-title">graph_edges</div>
+      <div><span class="schema-fk">FK</span> source_node, target_node</div>
+      <div>&nbsp;&nbsp;relationship_type, confidence (DOUBLE)</div>
+      <div>&nbsp;&nbsp;evidence_source, evidence_identifier</div>
+      <div style="margin-top:8px;font-size:10px;color:var(--t3)">ON DELETE CASCADE keeps the graph consistent</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="card card-v u5"><div class="card-head" style="color:var(--v2)">&#129514; PubChem Extraction</div><div class="card-body">IUPAC names, formula, molecular weight, treating diseases, target proteins ,  mapped straight from the compound payload.</div></div>
+      <div class="card card-sky u6"><div class="card-head" style="color:var(--sky2)">&#129504; UniProt Extraction</div><div class="card-body">Gene encoding, pathway participation, and protein-protein interactions ,  parsed from IntAct arrays.</div></div>
+      <div class="card card-fire u7"><div class="card-head" style="color:var(--fire2)">&#128204; Stub Nodes</div><div class="card-body">Unresolved target references automatically get placeholder nodes ,  preserving foreign keys and preventing transactional failures during ingest.</div></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="slide" id="s21">
+
+  <div class="orb" style="width:400px;height:400px;background:radial-gradient(circle,rgba(6,214,160,0.12),transparent);top:-80px;left:-60px;--t:11s"></div>
+  <div class="eyebrow em u1">Surfacing The Graph &middot; Next.js Console</div>
+  <div class="h1 u2">Click a badge.<br><span class="gv">Navigate the biology.</span></div>
+  <div class="sub u3">The Related Biology panel loads asynchronously ,  only when expanded ,  and turns every graph edge into a clickable, explorable search.</div>
+
+  <div class="g23" style="flex:1;min-height:0">
+    <div class="frame u4" style="overflow:hidden">
+      <div class="frame-bar"><div class="dot-r"></div><div class="dot-y"></div><div class="dot-g"></div><span class="frame-title">Atlas-Lab &middot; Search Playground &middot; Ibuprofen</span></div>
+      <div style="background:#0e0e22;padding:20px">
+        <div style="background:var(--card);border:1px solid var(--border2);border-radius:12px;padding:14px 16px;margin-bottom:10px">
+          <div style="font-size:13px;font-weight:700;color:var(--t1);margin-bottom:4px">Ibuprofen <span class="mono" style="margin-left:6px">CID 3672</span></div>
+          <div style="font-size:11px;color:var(--t2)">Non-steroidal anti-inflammatory drug &middot; COX-1/COX-2 inhibitor</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          <span class="tag tag-em">&#9660; Related Biology</span>
+          <span style="font-size:10px;color:var(--t3)">degree: 14 connections</span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <span class="tag tag-sky" style="cursor:pointer">COX-1</span>
+          <span class="tag tag-sky" style="cursor:pointer">COX-2</span>
+          <span class="tag tag-fire" style="cursor:pointer">Prostaglandin Synthesis</span>
+          <span class="tag tag-rose" style="cursor:pointer">Pain Pathway</span>
+          <span class="tag tag-v" style="cursor:pointer">PTGS1 (gene)</span>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="card card-em u5"><div class="card-head" style="color:var(--em2)">&#9203; Asynchronous, On-Demand</div><div class="card-body">The graph query only fires when the panel is expanded ,  core search stays fast regardless of graph size.</div></div>
+      <div class="card card-sky u6"><div class="card-head" style="color:var(--sky2)">&#128202; Degree Summary Indicators</div><div class="card-body">Each result shows connection count at a glance before the researcher decides to expand.</div></div>
+      <div class="card card-v u7"><div class="card-head" style="color:var(--v2)">&#128070; Clickable Navigation Badges</div><div class="card-body">Clicking <span class="mono">COX-1</span> immediately triggers a new search for that entity ,  the graph becomes the navigation, not just a sidebar.</div></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="slide" id="s22">
+
+  <div class="orb" style="width:350px;height:350px;background:radial-gradient(circle,rgba(6,214,160,0.12),transparent);bottom:-60px;right:-40px;--t:12s"></div>
+  <div class="eyebrow em u1">Empirical Latency &amp; Retrieval Quality</div>
+  <div class="h1 u2">Sub-5ms lookups.<br><span class="gem">Measurably better retrieval.</span></div>
+  <div class="sub u3">Evaluated on a 100-compound gold dataset and 50 iterations of the context endpoint.</div>
+
+  <div class="g2 u4" style="flex:1">
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="eyebrow" style="font-size:9px">Query Resolution Impact</div>
+      <div class="card card-v" style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px"><span style="font-size:13px">Hit@1</span><span style="font-family:'Syne',sans-serif;font-weight:800;color:var(--v2)">79.0% &rarr; 83.0%</span></div>
+      <div class="card card-sky" style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px"><span style="font-size:13px">Hit@10</span><span style="font-family:'Syne',sans-serif;font-weight:800;color:var(--sky2)">84.0% &rarr; 89.0%</span></div>
+      <div class="card card-em" style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px"><span style="font-size:13px">MRR</span><span style="font-family:'Syne',sans-serif;font-weight:800;color:var(--em2)">0.8150 &rarr; 0.8503</span></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="eyebrow" style="font-size:9px">Context Endpoint Latency</div>
+      <div class="g2" style="gap:10px">
+        <div class="card card-fire" style="text-align:center;padding:18px 10px"><div class="stat-n" style="font-size:30px;color:var(--fire2)">4.74ms</div><div class="stat-l">P50 (target &lt;10ms)</div></div>
+        <div class="card card-rose" style="text-align:center;padding:18px 10px"><div class="stat-n" style="font-size:30px;color:var(--rose2)">6.46ms</div><div class="stat-l">P95 (target &lt;25ms)</div></div>
+      </div>
+      <div class="card" style="padding:12px 18px;font-size:12px;color:var(--t2)">Min <strong style="color:var(--t1)">4.10ms</strong> &middot; Max <strong style="color:var(--t1)">7.46ms</strong> across 50 iterations ,  both targets <span style="color:var(--em2);font-weight:700">PASSED</span> with wide margin.</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="slide" id="s23">
+
+  <div class="orb" style="width:350px;height:350px;background:radial-gradient(circle,rgba(139,92,246,0.1),transparent);top:-60px;left:-40px;--t:13s"></div>
+  <div class="eyebrow em u1">Deployment, Stack &amp; Integrity</div>
+  <div class="h1 u2">Fully portable.<br><span class="gv">Rebuilds offline in a minute.</span></div>
+  <div class="sub u3">A Docker-first stack that any developer can pull and run without touching a live API.</div>
+
+  <div class="g3 u4" style="margin-bottom:12px">
+    <div class="card card-v"><div class="card-head" style="color:var(--v2)">&#128230; Docker Compose</div><div class="card-body">Postgres + Qdrant images, one command up.</div></div>
+    <div class="card card-sky"><div class="card-head" style="color:var(--sky2)">&#128190; Seed Data</div><div class="card-body"><span class="mono">data.sql.zip</span> ,  100k pre-ingested records.</div></div>
+    <div class="card card-em"><div class="card-head" style="color:var(--em2)">&#9889; 1-Minute Bootstrap</div><div class="card-body">Rebuilds Qdrant + BM25 indexes completely offline.</div></div>
+  </div>
+
+  <div class="g4 u5">
+    <div class="card" style="text-align:center;padding:14px 8px"><div style="font-size:22px;margin-bottom:5px">&#9889;</div><div style="font-size:12px;font-weight:700">FastAPI</div><div style="font-size:9px;color:var(--t3)">async backend</div></div>
+    <div class="card" style="text-align:center;padding:14px 8px"><div style="font-size:22px;margin-bottom:5px">&#128194;</div><div style="font-size:12px;font-weight:700">PostgreSQL</div><div style="font-size:9px;color:var(--t3)">relational graph</div></div>
+    <div class="card" style="text-align:center;padding:14px 8px"><div style="font-size:22px;margin-bottom:5px">&#128302;</div><div style="font-size:12px;font-weight:700">Qdrant</div><div style="font-size:9px;color:var(--t3)">vector search</div></div>
+    <div class="card" style="text-align:center;padding:14px 8px"><div style="font-size:22px;margin-bottom:5px">&#9889;</div><div style="font-size:12px;font-weight:700">Next.js</div><div style="font-size:9px;color:var(--t3)">console UI</div></div>
+  </div>
+
+  <div class="card u6" style="margin-top:12px;background:rgba(244,63,94,0.05);border-color:rgba(244,63,94,0.2)">
+    <div class="card-head" style="color:var(--rose2)">&#128274; Security &amp; Integrity</div>
+    <div class="card-body">Cascade deletion via <span class="mono">ON DELETE CASCADE</span> keeps the graph clean &middot; all queries parameterized via asyncpg (<span class="mono">$1, $2</span>) ,  zero SQL injection surface &middot; bulk restore temporarily toggles Postgres to replica mode to safely disable FK checks during raw inserts.</div>
+  </div>
+
+</div>
+
+<div class="slide" id="s24">
+
+  <div class="orb" style="width:600px;height:600px;background:radial-gradient(circle,rgba(6,214,160,0.16),transparent);top:-200px;right:50%;transform:translateX(50%);--t:16s"></div>
+  <div style="flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;position:relative;z-index:1">
+    <div class="eyebrow em u1" style="justify-content:center">Future Scope &amp; Vision</div>
+    <div class="h1 u2" style="font-size:clamp(28px,4.2vw,50px);max-width:820px">Proving a lightweight local stack<br>can <span class="gem">match enterprise search portals</span></div>
+    <div class="sub u3" style="max-width:660px;margin-top:10px">Empower molecular biologists to discover latent relations ,  compound &rarr; target protein &rarr; pathway ,  instantly, without GraphRAG cost or hallucination risk.</div>
+
+    <div class="g3 u4" style="margin-top:16px;width:100%;max-width:900px">
+      <div class="card card-v" style="text-align:center;padding:18px 14px"><div style="font-size:28px;margin-bottom:8px">&#129504;</div><div style="font-size:13px;font-weight:700;margin-bottom:6px">GNN Binding Prediction</div><div style="font-size:11px;color:var(--t2)">Graph neural networks for target binding affinity prediction.</div></div>
+      <div class="card card-sky" style="text-align:center;padding:18px 14px"><div style="font-size:28px;margin-bottom:8px">&#128301;</div><div style="font-size:13px;font-weight:700;margin-bottom:6px">Distributed Qdrant</div><div style="font-size:11px;color:var(--t2)">Migrate vector indexes to distributed clusters at scale.</div></div>
+      <div class="card card-em" style="text-align:center;padding:18px 14px"><div style="font-size:28px;margin-bottom:8px">&#128209;</div><div style="font-size:13px;font-weight:700;margin-bottom:6px">Automatic Curation</div><div style="font-size:11px;color:var(--t2)">SciSpacy NER over abstracts to expand the literature graph automatically.</div></div>
+    </div>
+
+    <div class="u5" style="margin-top:18px;max-width:780px;background:linear-gradient(135deg,rgba(6,214,160,0.1),rgba(56,189,248,0.06));border:1px solid rgba(6,214,160,0.3);border-radius:16px;padding:16px 22px">
+      <div style="font-size:13px;color:var(--t2);line-height:1.8"><strong style="color:var(--em2)">Educational vision:</strong> an open-source, clearly-architected reference for students learning search engineering and bioinformatics systems design ,  isolation, determinism, and asynchronicity as first-class design principles.</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="slide" id="s25">
+
+  <div class="orb" style="width:500px;height:500px;background:radial-gradient(circle,rgba(139,92,246,0.12),transparent);bottom:-150px;left:-100px;--t:14s"></div>
+  <div class="orb" style="width:400px;height:400px;background:radial-gradient(circle,rgba(6,214,160,0.08),transparent);top:-80px;right:-80px;--t:11s;animation-delay:-2s"></div>
+
+  <div style="flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;position:relative;z-index:1;gap:14px">
+    <div class="eyebrow em u1" style="justify-content:center">Acknowledgements</div>
+    <div class="h1 u2" style="font-size:clamp(32px,5vw,58px)">Acknowledgements</div>
+    <div class="sub u3" style="max-width:800px;margin-bottom:20px">Sincere appreciation for the guidance, support, and collaboration that made this project a success.</div>
+
+    <div style="display:flex;flex-direction:column;gap:14px;width:100%;max-width:820px;text-align:center" class="u4">
+      <div class="card card-v" style="padding:18px 24px;border-radius:16px">
+        <div style="font-size:16px;font-weight:700;color:var(--v2);margin-bottom:8px">Scientific Mentorship</div>
+        <div style="font-size:13px;color:var(--t2);line-height:1.7">Heartfelt gratitude to <strong>Dr. Akash Ranjan</strong> (Lab of Computation and Functional Genomics, CDFD) for his academic supervision, valuable feedback, and scientific guidance throughout this project. His expertise was vital to the engineering and direction of the Lumen platform.</div>
+      </div>
+      <div class="card card-em" style="padding:18px 24px;border-radius:16px">
+        <div style="font-size:16px;font-weight:700;color:var(--em2);margin-bottom:8px">Practice School Division</div>
+        <div style="font-size:13px;color:var(--t2);line-height:1.7">Sincere thanks to the <strong>Practice School Division, BITS Pilani</strong> and <strong>Prof. Jeevan Jaidi</strong>, our Faculty in Charge, for being offered an opportunity to intern here and for their support and guidance throughout the semester.</div>
+      </div>
+      <div class="card card-sky" style="padding:18px 24px;border-radius:16px">
+        <div style="font-size:16px;font-weight:700;color:var(--sky2);margin-bottom:8px">Collaboration &amp; Support</div>
+        <div style="font-size:13px;color:var(--t2);line-height:1.7">Special thanks to my <strong>co-interns</strong> at CDFD for their constant motivation, brainstorming sessions, and shared technical discussions. The scientific camaraderie and mutual feedback made the development journey engaging and highly productive.</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="slide" id="s26">
+
+  <div class="orb" style="width:700px;height:700px;background:radial-gradient(circle,rgba(139,92,246,0.2),transparent);top:-250px;right:-200px;--t:18s"></div>
+  <div class="orb" style="width:450px;height:450px;background:radial-gradient(circle,rgba(6,214,160,0.14),transparent);bottom:-120px;left:-80px;--t:12s;animation-delay:-3s"></div>
+
+  <div style="flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;position:relative;z-index:1;gap:18px">
+    <div class="u1" style="font-family:'Syne',sans-serif;font-size:clamp(46px,7vw,84px);font-weight:900;line-height:0.95;letter-spacing:-0.03em">
+      <span class="gv">Lumen</span> <span style="color:var(--t3);font-weight:400">&amp;</span> <span class="gem">Atlas-Lab</span>
+    </div>
+    <div class="u2" style="font-size:clamp(14px,1.5vw,18px);color:var(--t2);max-width:680px;line-height:1.65">
+      Two independent, production-validated platforms ,  one turning raw microscopy into publication-ready numbers, one turning fragmented biomedical text into a connected, queryable graph.
+    </div>
+
+    <div class="g4 u3" style="width:100%;max-width:820px">
+      <div class="stat"><div class="stat-n gv">2</div><div class="stat-l">full-stack platforms</div></div>
+      <div class="stat"><div class="stat-n gem">4.74ms</div><div class="stat-l">Atlas P50 latency</div></div>
+      <div class="stat"><div class="stat-n gf">200+</div><div class="stat-l">Lumen images validated</div></div>
+      <div class="stat"><div class="stat-n gw">60+</div><div class="stat-l">unit tests, both combined</div></div>
+    </div>
+
+    <div class="u4" style="display:flex;gap:14px;flex-wrap:wrap;justify-content:center">
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 20px;background:rgba(139,92,246,0.1);border:1px solid rgba(139,92,246,0.3);border-radius:100px">
+        <span style="font-size:13px">&#128025;</span><span class="mono" style="font-size:11px">github.com/Satyagni/Lumen</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 20px;background:rgba(6,214,160,0.1);border:1px solid rgba(6,214,160,0.3);border-radius:100px">
+        <span style="font-size:13px">&#128025;</span><span class="mono" style="font-size:11px">github.com/cfgcdfd05/RAG_Based_Compund_Retrieval</span>
+      </div>
+    </div>
+
+    <div class="u5" style="display:flex; justify-content:center; gap:60px; margin-top:20px; text-align:left; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.08); border-radius:16px; padding:24px 44px; width:100%; max-width:820px">
+      <div style="flex:1">
+        <div style="font-size:11px; font-weight:700; color:var(--sky); letter-spacing:0.15em; text-transform:uppercase; margin-bottom:8px">Developer</div>
+        <div style="font-size:22px; font-weight:800; color:var(--text); line-height:1.2">Satyagni Bhattacharya</div>
+        <div style="font-size:13px; color:var(--t3); margin-top:4px; font-family:'Space Mono', monospace">ID: 2024B1A41038H</div>
+      </div>
+      <div style="width:1px; background:rgba(255,255,255,0.12); align-self:stretch"></div>
+      <div style="flex:1; padding-left:20px">
+        <div style="font-size:11px; font-weight:700; color:var(--cyan); letter-spacing:0.15em; text-transform:uppercase; margin-bottom:8px">Guidance</div>
+        <div style="font-size:22px; font-weight:800; color:var(--text); line-height:1.2">Dr. Akash Ranjan</div>
+        <div style="font-size:13px; color:var(--t2); margin-top:4px">Lab of Computation and Functional Genomics, CDFD</div>
+        <div style="font-size:12px; color:var(--t3); margin-top:2px; font-family:'Space Mono', monospace">PS1 2026</div>
+      </div>
+    </div>
+
+    <div class="u6" style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+      <span class="tag tag-v">Cellpose CNN</span><span class="tag tag-sky">Hybrid Search + RRF</span><span class="tag tag-em">Deterministic Knowledge Graph</span><span class="tag tag-fire">Local-First</span><span class="tag tag-rose">Production-Validated</span>
+    </div>
+  </div>
+
+</div>
+
+</div><!-- /deck -->
+
+<div id="arrows">
+  <button onclick="nav(-1)">&larr; Prev</button>
+  <span class="sep" id="arw-ct">1 / 25</span>
+  <button onclick="nav(1)">Next &rarr;</button>
+</div>
+
+<script>
+const TOTAL = document.querySelectorAll('.slide').length;
+let cur = 0, busy = false;
+
+const sf = document.getElementById('starfield');
+for (let i = 0; i < 120; i++) {
+  const s = document.createElement('div');
+  s.className = 'star';
+  const size = Math.random() * 2.5 + 0.5;
+  const minOp = (Math.random() * 0.15 + 0.03).toFixed(2);
+  const maxOp = (parseFloat(minOp) + Math.random() * 0.4 + 0.1).toFixed(2);
+  const dur = (Math.random() * 4 + 2).toFixed(1) + 's';
+  s.style.cssText = `width:${size}px;height:${size}px;left:${Math.random()*100}%;top:${Math.random()*100}%;--d:${dur};--min-op:${minOp};--max-op:${maxOp};animation-delay:-${(Math.random()*5).toFixed(1)}s;`;
+  sf.appendChild(s);
+}
+
+const glow = document.getElementById('cursor-glow');
+document.addEventListener('mousemove', e => {
+  glow.style.left = e.clientX + 'px';
+  glow.style.top = e.clientY + 'px';
+});
+
+const rail = document.getElementById('nav-rail');
+for (let i = 0; i < TOTAL; i++) {
+  const p = document.createElement('div');
+  p.className = 'pip' + (i===0?' on':'');
+  p.title = 'Slide ' + (i+1);
+  p.onclick = () => goTo(i);
+  rail.appendChild(p);
+}
+
+function updateUI() {
+  document.getElementById('prog').style.width = ((cur+1)/TOTAL*100).toFixed(2)+'%';
+  document.getElementById('chip').textContent = String(cur+1).padStart(2,'0') + ' / ' + String(TOTAL).padStart(2,'0');
+  document.getElementById('arw-ct').textContent = (cur+1) + ' / ' + TOTAL;
+  document.querySelectorAll('.pip').forEach((p,i) => p.classList.toggle('on', i===cur));
+}
+
+function goTo(next, dir) {
+  if (busy || next===cur || next<0 || next>=TOTAL) return;
+  busy = true;
+  const direction = dir !== undefined ? dir : (next > cur ? 1 : -1);
+  const from = document.getElementById('s'+cur);
+  const to   = document.getElementById('s'+next);
+  from.classList.add(direction>0 ? 'leave-next' : 'leave-prev');
+  to.classList.add(direction>0 ? 'go-next' : 'go-prev');
+  to.classList.add('active');
+  cur = next;
+  updateUI();
+  setTimeout(() => {
+    document.querySelectorAll('.slide').forEach(sl => {
+      sl.classList.remove('go-next','go-prev','leave-next','leave-prev');
+      if (sl.id !== 's'+cur) sl.classList.remove('active');
+    });
+    busy = false;
+  }, 480);
+}
+
+function nav(dir) { goTo(cur+dir, dir); }
+
+document.addEventListener('keydown', e => {
+  if (e.key==='ArrowRight'||e.key==='ArrowDown'||e.key===' ') { e.preventDefault(); nav(1); }
+  if (e.key==='ArrowLeft'||e.key==='ArrowUp') { e.preventDefault(); nav(-1); }
+  if (e.key==='Home') goTo(0,-1);
+  if (e.key==='End') goTo(TOTAL-1,1);
+});
+
+let tx=0;
+document.addEventListener('touchstart',e=>{tx=e.touches[0].clientX;});
+document.addEventListener('touchend',e=>{
+  const dx=e.changedTouches[0].clientX-tx;
+  if(Math.abs(dx)>50) nav(dx<0?1:-1);
+});
+
+updateUI();
+</script
+<truncated 223 bytes>
+
+NOTE: The output was truncated because it was too long. Use a more targeted query or a smaller range to get the information you need.
